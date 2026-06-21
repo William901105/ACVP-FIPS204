@@ -96,6 +96,13 @@ cd fips204-acvp-web-demo/backend
 uvicorn app.main:app --reload --port 8000
 ```
 
+The same command also works from the project root:
+
+```bash
+cd fips204-acvp-web-demo
+uvicorn app.main:app --reload --port 8000
+```
+
 The backend enables CORS for `localhost:5173`, `127.0.0.1:5173`, `localhost:3000`, and `127.0.0.1:3000`.
 
 ## Install Frontend
@@ -217,4 +224,3 @@ POST /api/load-sample
 - Add a simplified session API
 - Add optional persisted import sessions
 - Add a full ACVP-compatible API layer as a separate future milestone
-
