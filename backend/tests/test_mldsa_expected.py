@@ -36,6 +36,15 @@ SAMPLE_ROOT = Path(__file__).resolve().parents[2] / "sample-data"
 KEYGEN_SAMPLE = SAMPLE_ROOT / "ML-DSA-keyGen-FIPS204"
 SEED_32_BYTES = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
 MESSAGE_HEX = "00010203040506070809"
+MU_64_BYTES = (
+    "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+    "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
+)
+BAD_MU_64_BYTES = (
+    "100102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+    "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
+)
+RND_32_BYTES = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
 
 
 def test_app_import_does_not_fail() -> None:
@@ -94,6 +103,55 @@ def test_siggen_endpoint_route_function_is_deterministic() -> None:
     assert first.signature == second.signature
 
 
+def test_siggen_endpoint_route_function_supports_phase25_modes() -> None:
+    keygen = mldsa_keygen(
+        MldsaKeygenRequest(parameterSet="ML-DSA-44", seed=SEED_32_BYTES)
+    )
+    requests = [
+        MldsaSigGenRequest(
+            parameterSet="ML-DSA-44",
+            sk=keygen.sk,
+            message=MESSAGE_HEX,
+        ),
+        MldsaSigGenRequest(
+            parameterSet="ML-DSA-44",
+            externalMu=False,
+            deterministic=False,
+            sk=keygen.sk,
+            message=MESSAGE_HEX,
+            rnd=RND_32_BYTES,
+        ),
+        MldsaSigGenRequest(
+            parameterSet="ML-DSA-44",
+            externalMu=True,
+            deterministic=True,
+            sk=keygen.sk,
+            mu=MU_64_BYTES,
+        ),
+        MldsaSigGenRequest(
+            parameterSet="ML-DSA-44",
+            externalMu=True,
+            deterministic=False,
+            sk=keygen.sk,
+            mu=MU_64_BYTES,
+            rnd=RND_32_BYTES,
+        ),
+    ]
+
+    responses = [mldsa_siggen(request) for request in requests]
+
+    for request, response in zip(requests, responses):
+        assert response.algorithm == "ML-DSA"
+        assert response.mode == "sigGen"
+        assert response.revision == "FIPS204"
+        assert response.parameterSet == request.parameterSet
+        assert response.signatureInterface == "internal"
+        assert response.externalMu is request.externalMu
+        assert response.deterministic is request.deterministic
+        assert len(response.signature) == 2420 * 2
+        assert response.signature == response.signature.upper()
+
+
 def test_siggen_endpoint_route_rejects_unsupported_flags() -> None:
     keygen = mldsa_keygen(
         MldsaKeygenRequest(parameterSet="ML-DSA-44", seed=SEED_32_BYTES)
@@ -112,6 +170,51 @@ def test_siggen_endpoint_route_rejects_unsupported_flags() -> None:
         )
 
     assert exc_info.value.status_code == 400
+
+
+def test_siggen_endpoint_route_rejects_phase25_invalid_combinations() -> None:
+    keygen = mldsa_keygen(
+        MldsaKeygenRequest(parameterSet="ML-DSA-44", seed=SEED_32_BYTES)
+    )
+    invalid_payloads = (
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": False,
+            "deterministic": True,
+            "sk": keygen.sk,
+        },
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": True,
+            "deterministic": True,
+            "sk": keygen.sk,
+        },
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": False,
+            "deterministic": False,
+            "sk": keygen.sk,
+            "message": MESSAGE_HEX,
+        },
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": False,
+            "deterministic": True,
+            "sk": keygen.sk,
+            "message": MESSAGE_HEX,
+            "rnd": RND_32_BYTES,
+        },
+    )
+
+    for payload in invalid_payloads:
+        with pytest.raises(HTTPException) as exc_info:
+            mldsa_siggen(payload)
+
+        assert exc_info.value.status_code == 400
 
 
 def test_sigver_endpoint_route_function_returns_true_and_false() -> None:
@@ -153,6 +256,48 @@ def test_sigver_endpoint_route_function_returns_true_and_false() -> None:
     assert bad_message.testPassed is False
 
 
+def test_sigver_endpoint_route_function_supports_external_mu() -> None:
+    keygen = mldsa_keygen(
+        MldsaKeygenRequest(parameterSet="ML-DSA-44", seed=SEED_32_BYTES)
+    )
+    signature = mldsa_siggen(
+        MldsaSigGenRequest(
+            parameterSet="ML-DSA-44",
+            externalMu=True,
+            sk=keygen.sk,
+            mu=MU_64_BYTES,
+        )
+    ).signature
+
+    valid = mldsa_sigver(
+        MldsaSigVerRequest(
+            parameterSet="ML-DSA-44",
+            externalMu=True,
+            pk=keygen.pk,
+            mu=MU_64_BYTES,
+            signature=signature,
+        )
+    )
+    bad_mu = mldsa_sigver(
+        MldsaSigVerRequest(
+            parameterSet="ML-DSA-44",
+            externalMu=True,
+            pk=keygen.pk,
+            mu=BAD_MU_64_BYTES,
+            signature=signature,
+        )
+    )
+
+    assert valid.algorithm == "ML-DSA"
+    assert valid.mode == "sigVer"
+    assert valid.revision == "FIPS204"
+    assert valid.parameterSet == "ML-DSA-44"
+    assert valid.signatureInterface == "internal"
+    assert valid.externalMu is True
+    assert valid.testPassed is True
+    assert bad_mu.testPassed is False
+
+
 def test_sigver_endpoint_route_rejects_unsupported_flags() -> None:
     keygen = mldsa_keygen(
         MldsaKeygenRequest(parameterSet="ML-DSA-44", seed=SEED_32_BYTES)
@@ -183,6 +328,50 @@ def test_sigver_endpoint_route_rejects_unsupported_flags() -> None:
             "signature": signature,
         },
     ):
+        with pytest.raises(HTTPException) as exc_info:
+            mldsa_sigver(payload)
+
+        assert exc_info.value.status_code == 400
+
+
+def test_sigver_endpoint_route_rejects_phase25_invalid_combinations() -> None:
+    keygen = mldsa_keygen(
+        MldsaKeygenRequest(parameterSet="ML-DSA-44", seed=SEED_32_BYTES)
+    )
+    signature = mldsa_siggen(
+        MldsaSigGenRequest(
+            parameterSet="ML-DSA-44",
+            sk=keygen.sk,
+            message=MESSAGE_HEX,
+        )
+    ).signature
+    invalid_payloads = (
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": False,
+            "pk": keygen.pk,
+            "signature": signature,
+        },
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": True,
+            "pk": keygen.pk,
+            "signature": signature,
+        },
+        {
+            "parameterSet": "ML-DSA-44",
+            "signatureInterface": "internal",
+            "externalMu": False,
+            "pk": keygen.pk,
+            "message": MESSAGE_HEX,
+            "mu": MU_64_BYTES,
+            "signature": signature,
+        },
+    )
+
+    for payload in invalid_payloads:
         with pytest.raises(HTTPException) as exc_info:
             mldsa_sigver(payload)
 

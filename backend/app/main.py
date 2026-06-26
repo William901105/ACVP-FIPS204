@@ -137,9 +137,17 @@ def mldsa_keygen_expected_results(
 def mldsa_siggen(payload: Any = Body(...)) -> MldsaSigGenResponse:
     try:
         request = _parse_siggen_request(payload)
-        result = siggen_internal(request.parameterSet, request.sk, request.message)
+        result = siggen_internal(
+            request.parameterSet,
+            request.sk,
+            request.message,
+            mu_hex=request.mu,
+            rnd_hex=request.rnd,
+            external_mu=request.externalMu,
+            deterministic=request.deterministic,
+        )
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+        raise HTTPException(status_code=400, detail=_validation_error_detail(exc)) from exc
     except MldsaOracleInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MldsaOracleError as exc:
@@ -147,6 +155,8 @@ def mldsa_siggen(payload: Any = Body(...)) -> MldsaSigGenResponse:
 
     return MldsaSigGenResponse(
         parameterSet=request.parameterSet,
+        externalMu=request.externalMu,
+        deterministic=request.deterministic,
         signature=result["signature"],
     )
 
@@ -160,9 +170,11 @@ def mldsa_sigver(payload: Any = Body(...)) -> MldsaSigVerResponse:
             request.pk,
             request.message,
             request.signature,
+            mu_hex=request.mu,
+            external_mu=request.externalMu,
         )
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+        raise HTTPException(status_code=400, detail=_validation_error_detail(exc)) from exc
     except MldsaOracleInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MldsaOracleError as exc:
@@ -170,6 +182,7 @@ def mldsa_sigver(payload: Any = Body(...)) -> MldsaSigVerResponse:
 
     return MldsaSigVerResponse(
         parameterSet=request.parameterSet,
+        externalMu=request.externalMu,
         testPassed=result["testPassed"],
     )
 
@@ -306,3 +319,10 @@ def _parse_sigver_request(payload: Any) -> MldsaSigVerRequest:
     if isinstance(payload, MldsaSigVerRequest):
         return payload
     return MldsaSigVerRequest.model_validate(payload)
+
+
+def _validation_error_detail(exc: ValidationError) -> Any:
+    try:
+        return exc.errors(include_context=False)
+    except TypeError:
+        return exc.errors()

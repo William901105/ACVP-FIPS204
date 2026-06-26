@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 JsonObject = Union[Dict[str, Any], List[Any]]
@@ -74,10 +74,33 @@ class MldsaKeygenExpectedResultsResponse(BaseModel):
 class MldsaSigGenRequest(BaseModel):
     parameterSet: Literal["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"]
     signatureInterface: Literal["internal"] = "internal"
-    externalMu: Literal[False] = False
-    deterministic: Literal[True] = True
+    externalMu: bool = False
+    deterministic: bool = True
     sk: str
-    message: str
+    message: Optional[str] = None
+    mu: Optional[str] = None
+    rnd: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_internal_siggen_inputs(self) -> "MldsaSigGenRequest":
+        if self.externalMu:
+            if self.mu is None:
+                raise ValueError("mu is required when externalMu=true")
+            if self.message is not None:
+                raise ValueError("message is not allowed when externalMu=true")
+        else:
+            if self.message is None:
+                raise ValueError("message is required when externalMu=false")
+            if self.mu is not None:
+                raise ValueError("mu is not allowed when externalMu=false")
+
+        if self.deterministic:
+            if self.rnd is not None:
+                raise ValueError("rnd is not allowed when deterministic=true")
+        elif self.rnd is None:
+            raise ValueError("rnd is required when deterministic=false")
+
+        return self
 
 
 class MldsaSigGenResponse(BaseModel):
@@ -86,18 +109,33 @@ class MldsaSigGenResponse(BaseModel):
     revision: Literal["FIPS204"] = "FIPS204"
     parameterSet: str
     signatureInterface: Literal["internal"] = "internal"
-    externalMu: Literal[False] = False
-    deterministic: Literal[True] = True
+    externalMu: bool
+    deterministic: bool
     signature: str
 
 
 class MldsaSigVerRequest(BaseModel):
     parameterSet: Literal["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"]
     signatureInterface: Literal["internal"] = "internal"
-    externalMu: Literal[False] = False
+    externalMu: bool = False
     pk: str
-    message: str
+    message: Optional[str] = None
+    mu: Optional[str] = None
     signature: str
+
+    @model_validator(mode="after")
+    def validate_internal_sigver_inputs(self) -> "MldsaSigVerRequest":
+        if self.externalMu:
+            if self.mu is None:
+                raise ValueError("mu is required when externalMu=true")
+            if self.message is not None:
+                raise ValueError("message is not allowed when externalMu=true")
+        else:
+            if self.message is None:
+                raise ValueError("message is required when externalMu=false")
+            if self.mu is not None:
+                raise ValueError("mu is not allowed when externalMu=false")
+        return self
 
 
 class MldsaSigVerResponse(BaseModel):
@@ -106,5 +144,5 @@ class MldsaSigVerResponse(BaseModel):
     revision: Literal["FIPS204"] = "FIPS204"
     parameterSet: str
     signatureInterface: Literal["internal"] = "internal"
-    externalMu: Literal[False] = False
+    externalMu: bool
     testPassed: bool
