@@ -61,7 +61,7 @@ def keygen_internal(parameter_set: str, seed_hex: str) -> dict[str, str]:
     if not binary.exists():
         raise MldsaOracleConfigError(
             "native ML-DSA oracle binary not found at "
-            f"{binary}. Run `make` in {_NATIVE_DIR} first."
+            f"{binary}. Run `make` in backend/native/mldsa_oracle first."
         )
 
     completed = _run_oracle(binary, seed)

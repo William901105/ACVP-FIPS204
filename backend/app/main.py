@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .acvp_mldsa.errors import AcvpSchemaError
+from .acvp_mldsa.expected import generate_keygen_expected_results_from_prompt
 from .acvp_mldsa.validators import (
     validate_mldsa_registration,
     validate_mldsa_response,
@@ -20,9 +21,12 @@ from .crypto_oracle.mldsa_oracle import (
     keygen_internal,
 )
 from .models import (
+    GeneratedKeygenImportRequest,
     ImportRequest,
     ImportSummary,
     LoadSampleRequest,
+    MldsaKeygenExpectedResultsRequest,
+    MldsaKeygenExpectedResultsResponse,
     MldsaKeygenRequest,
     MldsaKeygenResponse,
     ValidateRequest,
@@ -103,6 +107,25 @@ def mldsa_keygen(payload: MldsaKeygenRequest) -> MldsaKeygenResponse:
     )
 
 
+@app.post(
+    "/api/oracle/mldsa/keygen/expected-results",
+    response_model=MldsaKeygenExpectedResultsResponse,
+)
+def mldsa_keygen_expected_results(
+    payload: MldsaKeygenExpectedResultsRequest,
+) -> MldsaKeygenExpectedResultsResponse:
+    try:
+        expected_results = generate_keygen_expected_results_from_prompt(payload.prompt)
+    except AcvpSchemaError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_dict()) from exc
+    except MldsaOracleInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MldsaOracleError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return MldsaKeygenExpectedResultsResponse(expectedResults=expected_results)
+
+
 @app.post("/api/import", response_model=ImportSummary)
 def import_bundle(payload: ImportRequest) -> Any:
     try:
@@ -119,6 +142,29 @@ def import_bundle(payload: ImportRequest) -> Any:
         return _store_import(bundle)
     except AcvpSchemaError as exc:
         return _schema_error_response(exc)
+    except (AcvpParseError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/import/generated-keygen", response_model=ImportSummary)
+def import_generated_keygen_bundle(payload: GeneratedKeygenImportRequest) -> Any:
+    try:
+        expected_results = generate_keygen_expected_results_from_prompt(payload.prompt)
+        validate_mldsa_response(expected_results, expected_mode="keyGen")
+        validate_mldsa_response(payload.response, expected_mode="keyGen")
+        bundle = {
+            "prompt": payload.prompt,
+            "expectedResults": expected_results,
+            "response": payload.response,
+            "label": payload.label,
+        }
+        return _store_import(bundle)
+    except AcvpSchemaError as exc:
+        return _schema_error_response(exc)
+    except MldsaOracleInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MldsaOracleError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except (AcvpParseError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

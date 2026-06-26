@@ -15,6 +15,12 @@ class ImportRequest(BaseModel):
     label: Optional[str] = None
 
 
+class GeneratedKeygenImportRequest(BaseModel):
+    prompt: JsonObject
+    response: JsonObject
+    label: Optional[str] = None
+
+
 class ValidateRequest(BaseModel):
     importId: str
 
@@ -52,3 +58,14 @@ class MldsaKeygenResponse(BaseModel):
     seed: str
     pk: str
     sk: str
+
+
+class MldsaKeygenExpectedResultsRequest(BaseModel):
+    prompt: JsonObject
+
+
+class MldsaKeygenExpectedResultsResponse(BaseModel):
+    algorithm: Literal["ML-DSA"] = "ML-DSA"
+    mode: Literal["keyGen"] = "keyGen"
+    revision: Literal["FIPS204"] = "FIPS204"
+    expectedResults: JsonObject
