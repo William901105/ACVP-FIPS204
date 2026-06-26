@@ -9,3 +9,49 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+## ML-DSA keyGen oracle
+
+This backend includes a local crypto oracle integration for ML-DSA
+`keyGen_internal` using the external `mldsa-native` checkout at
+`/root/ACVP204/mldsa-native`.
+
+Build the native oracle binaries:
+
+```bash
+cd backend/native/mldsa_oracle
+make clean
+make
+```
+
+Test the C oracle directly:
+
+```bash
+./bin/mldsa44_keygen_oracle 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F
+```
+
+Start the backend:
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Test the FastAPI oracle endpoint:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/oracle/mldsa/keygen \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parameterSet": "ML-DSA-44",
+    "seed": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+  }'
+```
+
+The response includes `pk` and `sk` as uppercase hex strings.
+
+Current scope:
+
+- This is only a crypto oracle integration, not a formal ACVP
+  session/vector set lifecycle implementation.
+- Only ML-DSA keyGen is supported. sigGen and sigVer are not implemented.

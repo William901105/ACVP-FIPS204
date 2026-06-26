@@ -15,3 +15,6 @@ frontend/vite.config.d.ts
 *.log
 coverage/
 frontend/.vite/
+
+# Native build artifacts
+backend/native/mldsa_oracle/bin/

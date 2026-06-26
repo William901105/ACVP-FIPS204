@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .acvp_parser import AcvpParseError, normalize_acvp_json, summarize_vector_set
-from .models import ImportRequest, ImportSummary, LoadSampleRequest, ValidateRequest
+from .crypto_oracle.mldsa_oracle import (
+    MldsaOracleError,
+    MldsaOracleInputError,
+    keygen_internal,
+)
+from .models import (
+    ImportRequest,
+    ImportSummary,
+    LoadSampleRequest,
+    MldsaKeygenRequest,
+    MldsaKeygenResponse,
+    ValidateRequest,
+)
 from .report import build_report
 from .sample_loader import SampleLoaderError, list_sample_data, load_sample
 from .validator import validate
@@ -32,12 +44,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-IMPORT_STORE: dict[str, dict[str, Any]] = {}
+IMPORT_STORE: Dict[str, Dict[str, Any]] = {}
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
+def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/oracle/mldsa/keygen", response_model=MldsaKeygenResponse)
+def mldsa_keygen(payload: MldsaKeygenRequest) -> MldsaKeygenResponse:
+    try:
+        result = keygen_internal(payload.parameterSet, payload.seed)
+    except MldsaOracleInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MldsaOracleError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return MldsaKeygenResponse(
+        parameterSet=payload.parameterSet,
+        seed=payload.seed.upper(),
+        pk=result["pk"],
+        sk=result["sk"],
+    )
 
 
 @app.post("/api/import", response_model=ImportSummary)
@@ -55,7 +84,7 @@ def import_bundle(payload: ImportRequest) -> ImportSummary:
 
 
 @app.post("/api/validate")
-def validate_import(payload: ValidateRequest) -> dict[str, Any]:
+def validate_import(payload: ValidateRequest) -> Dict[str, Any]:
     bundle = _get_bundle(payload.importId)
     try:
         result = validate(bundle)
@@ -67,7 +96,7 @@ def validate_import(payload: ValidateRequest) -> dict[str, Any]:
 
 
 @app.get("/api/import/{import_id}")
-def get_import(import_id: str) -> dict[str, Any]:
+def get_import(import_id: str) -> Dict[str, Any]:
     bundle = _get_bundle(import_id)
     prompt_vs = normalize_acvp_json(bundle["prompt"])
     expected_vs = normalize_acvp_json(bundle["expectedResults"])
@@ -84,7 +113,7 @@ def get_import(import_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/report/{import_id}")
-def get_report(import_id: str) -> dict[str, Any]:
+def get_report(import_id: str) -> Dict[str, Any]:
     bundle = _get_bundle(import_id)
     if "report" not in bundle:
         result = validate(bundle)
@@ -94,7 +123,7 @@ def get_report(import_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/sample-data")
-def sample_data() -> dict[str, Any]:
+def sample_data() -> Dict[str, Any]:
     return {"samples": list_sample_data()}
 
 
@@ -107,7 +136,7 @@ def load_sample_import(payload: LoadSampleRequest) -> ImportSummary:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _store_import(bundle: dict[str, Any]) -> ImportSummary:
+def _store_import(bundle: Dict[str, Any]) -> ImportSummary:
     prompt_vs = normalize_acvp_json(bundle["prompt"])
     normalize_acvp_json(bundle["expectedResults"])
     normalize_acvp_json(bundle["response"])
@@ -117,14 +146,13 @@ def _store_import(bundle: dict[str, Any]) -> ImportSummary:
     return _summarize_bundle(import_id, bundle)
 
 
-def _summarize_bundle(import_id: str, bundle: dict[str, Any]) -> ImportSummary:
+def _summarize_bundle(import_id: str, bundle: Dict[str, Any]) -> ImportSummary:
     prompt_summary = summarize_vector_set(normalize_acvp_json(bundle["prompt"]))
     return ImportSummary(importId=import_id, label=bundle.get("label"), **prompt_summary)
 
 
-def _get_bundle(import_id: str) -> dict[str, Any]:
+def _get_bundle(import_id: str) -> Dict[str, Any]:
     bundle = IMPORT_STORE.get(import_id)
     if bundle is None:
         raise HTTPException(status_code=404, detail="Unknown importId")
     return bundle
-
