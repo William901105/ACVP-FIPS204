@@ -11,6 +11,7 @@ from .mldsa_helpers import (
     normalize_hex,
     parse_json_output,
     run_native_binary,
+    validate_bool_output,
     validate_hex_output,
     validate_parameter_set,
 )
@@ -44,5 +45,17 @@ def siggen_internal(
     return {"signature": signature}
 
 
-def sigver_internal(*args, **kwargs) -> dict[str, bool]:  # noqa: ANN002, ANN003
-    raise NotImplementedError("sigVer oracle is not implemented in Phase 2-3")
+def sigver_internal(
+    parameter_set: str,
+    pk_hex: str,
+    message_hex: str,
+    signature_hex: str,
+) -> dict[str, bool]:
+    config = validate_parameter_set(parameter_set)
+    pk = normalize_hex("pk", pk_hex, int(config["pk_bytes"]))
+    message = normalize_hex("message", message_hex)
+    signature = normalize_hex("signature", signature_hex, int(config["sig_bytes"]))
+    completed = run_native_binary(config["sigver_binary"], [pk, message, signature])
+    output = parse_json_output(completed.stdout)
+    test_passed = validate_bool_output(output, "testPassed")
+    return {"testPassed": test_passed}

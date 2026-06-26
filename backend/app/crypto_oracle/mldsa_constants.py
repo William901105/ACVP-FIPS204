@@ -18,6 +18,7 @@ SUPPORTED_PARAMETER_SETS: Dict[str, Dict[str, Any]] = {
         "mu_bytes": 64,
         "keygen_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa44_keygen_oracle",
         "siggen_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa44_siggen_oracle",
+        "sigver_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa44_sigver_oracle",
     },
     "ML-DSA-65": {
         "level": 65,
@@ -29,6 +30,7 @@ SUPPORTED_PARAMETER_SETS: Dict[str, Dict[str, Any]] = {
         "mu_bytes": 64,
         "keygen_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa65_keygen_oracle",
         "siggen_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa65_siggen_oracle",
+        "sigver_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa65_sigver_oracle",
     },
     "ML-DSA-87": {
         "level": 87,
@@ -40,5 +42,6 @@ SUPPORTED_PARAMETER_SETS: Dict[str, Dict[str, Any]] = {
         "mu_bytes": 64,
         "keygen_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa87_keygen_oracle",
         "siggen_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa87_siggen_oracle",
+        "sigver_binary": MLDSA_NATIVE_ORACLE_DIR / "bin" / "mldsa87_sigver_oracle",
     },
 }

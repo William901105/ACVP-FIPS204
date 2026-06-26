@@ -115,5 +115,16 @@ def validate_hex_output(
     return value.upper()
 
 
+def validate_bool_output(output: Dict[str, Any], field: str) -> bool:
+    if field not in output:
+        raise MldsaOracleExecutionError(f"native ML-DSA oracle missing {field!r}")
+    value = output[field]
+    if not isinstance(value, bool):
+        raise MldsaOracleExecutionError(
+            f"native ML-DSA oracle returned non-boolean {field!r}"
+        )
+    return value
+
+
 # Compatibility alias for code that previously referenced the private name.
 _NATIVE_DIR = MLDSA_NATIVE_ORACLE_DIR

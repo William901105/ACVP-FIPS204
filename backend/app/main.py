@@ -21,6 +21,7 @@ from .crypto_oracle.mldsa_oracle import (
     MldsaOracleInputError,
     keygen_internal,
     siggen_internal,
+    sigver_internal,
 )
 from .models import (
     GeneratedKeygenImportRequest,
@@ -33,6 +34,8 @@ from .models import (
     MldsaKeygenResponse,
     MldsaSigGenRequest,
     MldsaSigGenResponse,
+    MldsaSigVerRequest,
+    MldsaSigVerResponse,
     ValidateRequest,
 )
 from .report import build_report
@@ -145,6 +148,29 @@ def mldsa_siggen(payload: Any = Body(...)) -> MldsaSigGenResponse:
     return MldsaSigGenResponse(
         parameterSet=request.parameterSet,
         signature=result["signature"],
+    )
+
+
+@app.post("/api/oracle/mldsa/sigver", response_model=MldsaSigVerResponse)
+def mldsa_sigver(payload: Any = Body(...)) -> MldsaSigVerResponse:
+    try:
+        request = _parse_sigver_request(payload)
+        result = sigver_internal(
+            request.parameterSet,
+            request.pk,
+            request.message,
+            request.signature,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+    except MldsaOracleInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MldsaOracleError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return MldsaSigVerResponse(
+        parameterSet=request.parameterSet,
+        testPassed=result["testPassed"],
     )
 
 
@@ -274,3 +300,9 @@ def _parse_siggen_request(payload: Any) -> MldsaSigGenRequest:
     if isinstance(payload, MldsaSigGenRequest):
         return payload
     return MldsaSigGenRequest.model_validate(payload)
+
+
+def _parse_sigver_request(payload: Any) -> MldsaSigVerRequest:
+    if isinstance(payload, MldsaSigVerRequest):
+        return payload
+    return MldsaSigVerRequest.model_validate(payload)

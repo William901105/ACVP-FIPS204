@@ -7,6 +7,7 @@ This backend currently supports:
 - `POST /api/oracle/mldsa/keygen/expected-results` for generating keyGen `expectedResults` from an ACVP-style keyGen prompt.
 - `POST /api/import/generated-keygen` for importing a prompt plus response while generating keyGen `expectedResults` server-side.
 - `POST /api/oracle/mldsa/siggen` for a single internal deterministic sigGen oracle call.
+- `POST /api/oracle/mldsa/sigver` for a single internal sigVer oracle call.
 
 This is still a local demo service, not a formal ACVP server.
 
@@ -27,6 +28,9 @@ bin/mldsa87_keygen_oracle
 bin/mldsa44_siggen_oracle
 bin/mldsa65_siggen_oracle
 bin/mldsa87_siggen_oracle
+bin/mldsa44_sigver_oracle
+bin/mldsa65_sigver_oracle
+bin/mldsa87_sigver_oracle
 ```
 
 ## Test the C oracle
@@ -59,6 +63,61 @@ curl -X POST http://127.0.0.1:8000/api/oracle/mldsa/siggen \
     "sk": "PUT_SECRET_KEY_HEX_HERE",
     "message": "00010203040506070809"
   }'
+```
+
+## Call the single-case sigVer endpoint
+
+The Phase 2-4 sigVer oracle supports only ACVP internal message verification:
+
+- `signatureInterface = "internal"`
+- `externalMu = false`
+
+It uses the mldsa-native `verify_internal` API with `externalmu = 0` and an
+empty prefix, matching the Phase 2-3 internal sigGen oracle path.
+
+A valid signature returns `testPassed=true`. A well-formed but invalid
+signature or message returns `testPassed=false` with HTTP 200. Invalid caller
+input returns HTTP 400, and native configuration, execution, or malformed
+native output errors return HTTP 500.
+
+```bash
+cd backend/native/mldsa_oracle
+SEED=000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F
+MESSAGE=00010203040506070809
+
+./bin/mldsa44_keygen_oracle "$SEED" > /tmp/keygen44.json
+PK=$(python3 - <<'PY'
+import json
+print(json.load(open("/tmp/keygen44.json"))["pk"])
+PY
+)
+SK=$(python3 - <<'PY'
+import json
+print(json.load(open("/tmp/keygen44.json"))["sk"])
+PY
+)
+
+./bin/mldsa44_siggen_oracle "$SK" "$MESSAGE" > /tmp/siggen44.json
+SIG=$(python3 - <<'PY'
+import json
+print(json.load(open("/tmp/siggen44.json"))["signature"])
+PY
+)
+
+./bin/mldsa44_sigver_oracle "$PK" "$MESSAGE" "$SIG"
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/oracle/mldsa/sigver \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"parameterSet\": \"ML-DSA-44\",
+    \"signatureInterface\": \"internal\",
+    \"externalMu\": false,
+    \"pk\": \"$PK\",
+    \"message\": \"00010203040506070809\",
+    \"signature\": \"$SIG\"
+  }"
 ```
 
 ## Start the backend
@@ -119,7 +178,7 @@ The ML-DSA oracle wrapper is split into focused modules:
 - `app.crypto_oracle.mldsa_helpers` centralizes hex validation, parameter-set validation, native subprocess execution, JSON parsing, and native output validation.
 - `app.crypto_oracle.mldsa_oracle` keeps the public oracle API and compatibility re-exports.
 
-After Phase 2-2, `keygen_internal()` remained the only implemented ML-DSA oracle operation and `siggen_internal()` / `sigver_internal()` were stubs. Phase 2-3 implements the restricted internal deterministic `siggen_internal()` path; `sigver_internal()` remains a stub.
+After Phase 2-2, `keygen_internal()` remained the only implemented ML-DSA oracle operation and `siggen_internal()` / `sigver_internal()` were stubs. Phase 2-3 implements the restricted internal deterministic `siggen_internal()` path. Phase 2-4 implements the restricted internal `sigver_internal()` path.
 
 Generated keyGen `expectedResults` preserve prompt top-level `isSample` metadata when present, but still do not copy prompt group fields such as `parameterSet` or `testType`, and do not copy test case `seed` values.
 
@@ -131,7 +190,23 @@ Generated keyGen `expectedResults` preserve prompt top-level `isSample` metadata
 - `bin/mldsa65_siggen_oracle`
 - `bin/mldsa87_siggen_oracle`
 
-Randomized sigGen, externalMu sigGen, external pure/preHash sigGen, and sigVer remain out of scope.
+Randomized sigGen, externalMu sigGen, and external pure/preHash sigGen remain out of scope.
+
+## Phase 2-4 sigVer internal oracle
+
+`sigver_internal()` is now implemented for one ACVP case shape: internal
+signature interface and `externalMu=false`. The native wrappers are:
+
+- `bin/mldsa44_sigver_oracle`
+- `bin/mldsa65_sigver_oracle`
+- `bin/mldsa87_sigver_oracle`
+
+The API endpoint is `POST /api/oracle/mldsa/sigver`. It returns
+`testPassed=true` for valid signatures and `testPassed=false` for well-formed
+invalid signatures or messages. It does not generate sigVer `expectedResults`.
+
+externalMu sigVer, external pure sigVer, external preHash sigVer, a generic
+expectedResults endpoint, and full ACVP lifecycle endpoints remain out of scope.
 
 ## Current non-goals
 
@@ -142,5 +217,7 @@ The backend does not currently include:
 - JWT authentication
 - randomized sigGen native oracle
 - externalMu sigGen native oracle
-- sigVer native oracle
+- externalMu sigVer native oracle
+- sigVer expectedResults generator
+- generic expectedResults endpoint
 - Full ACVP vector set lifecycle

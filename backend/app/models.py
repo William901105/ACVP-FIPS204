@@ -89,3 +89,22 @@ class MldsaSigGenResponse(BaseModel):
     externalMu: Literal[False] = False
     deterministic: Literal[True] = True
     signature: str
+
+
+class MldsaSigVerRequest(BaseModel):
+    parameterSet: Literal["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"]
+    signatureInterface: Literal["internal"] = "internal"
+    externalMu: Literal[False] = False
+    pk: str
+    message: str
+    signature: str
+
+
+class MldsaSigVerResponse(BaseModel):
+    algorithm: Literal["ML-DSA"] = "ML-DSA"
+    mode: Literal["sigVer"] = "sigVer"
+    revision: Literal["FIPS204"] = "FIPS204"
+    parameterSet: str
+    signatureInterface: Literal["internal"] = "internal"
+    externalMu: Literal[False] = False
+    testPassed: bool
