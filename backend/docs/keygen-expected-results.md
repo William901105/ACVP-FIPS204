@@ -5,6 +5,7 @@ This backend currently supports:
 - ML-DSA keyGen native oracle binaries backed by `mldsa-native`.
 - `POST /api/oracle/mldsa/keygen` for a single deterministic keyGen oracle call.
 - `POST /api/oracle/mldsa/keygen/expected-results` for generating keyGen `expectedResults` from an ACVP-style keyGen prompt.
+- `POST /api/oracle/mldsa/expected-results` for generating keyGen, sigGen, or sigVer `expectedResults` from an ACVP-style prompt.
 - `POST /api/import/generated-keygen` for importing a prompt plus response while generating keyGen `expectedResults` server-side.
 - `POST /api/oracle/mldsa/siggen` for single-case internal and external sigGen oracle calls.
 - `POST /api/oracle/mldsa/sigver` for single-case internal and external sigVer oracle calls.
@@ -251,6 +252,90 @@ curl -X POST http://127.0.0.1:8000/api/oracle/mldsa/keygen/expected-results \
 
 The generated `expectedResults` preserves `vsId`, `algorithm`, `mode`, `revision`, `tgId`, and `tcId`, and includes `pk` and `sk`. It does not copy prompt `seed` values into response test cases.
 
+## Generate generic ML-DSA expectedResults
+
+`POST /api/oracle/mldsa/expected-results` accepts either a direct ML-DSA
+vector set object or an ACVP array container:
+
+```json
+[
+  {"acvVersion": "1.0"},
+  {
+    "vsId": 42,
+    "algorithm": "ML-DSA",
+    "mode": "keyGen",
+    "revision": "FIPS204",
+    "testGroups": [
+      {
+        "tgId": 1,
+        "testType": "AFT",
+        "parameterSet": "ML-DSA-44",
+        "tests": [
+          {
+            "tcId": 1,
+            "seed": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+The output preserves the input container style. Direct vector set input returns
+a direct vector set. Array container input returns the version object followed
+by the generated `expectedResults` vector set.
+
+Supported modes:
+
+```text
+keyGen -> tcId, pk, sk
+sigGen -> tcId, signature
+sigVer -> tcId, testPassed
+```
+
+Prompt-only fields are intentionally not copied into the response:
+
+```text
+group: testType, parameterSet, deterministic, signatureInterface, externalMu, preHash
+test: seed, sk, pk, message, mu, rnd, context, hashAlg, signature
+```
+
+Each output group contains only `tgId` and `tests`. If the prompt vector set
+has top-level `isSample`, the generated vector set preserves it.
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/oracle/mldsa/expected-results \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": {
+      "vsId": 7001,
+      "algorithm": "ML-DSA",
+      "mode": "sigGen",
+      "revision": "FIPS204",
+      "testGroups": [
+        {
+          "tgId": 1,
+          "testType": "AFT",
+          "parameterSet": "ML-DSA-44",
+          "signatureInterface": "internal",
+          "externalMu": false,
+          "deterministic": true,
+          "tests": [
+            {
+              "tcId": 1,
+              "sk": "PUT_SECRET_KEY_HEX_HERE",
+              "message": "00010203040506070809"
+            }
+          ]
+        }
+      ]
+    }
+  }'
+```
+
 ## Phase 2-2 oracle module refactor
 
 The ML-DSA oracle wrapper is split into focused modules:
@@ -342,8 +427,7 @@ It also supports:
 ./bin/mldsa44_sigver_oracle 1 "$PK" "$MU" "$SIG"
 ```
 
-Generic expectedResults, sigGen/sigVer expectedResults generation, and full
-ACVP lifecycle endpoints remain out of scope.
+Full ACVP lifecycle endpoints remain out of scope.
 
 ## Phase 2-6 external pure and preHash coverage
 
@@ -390,14 +474,52 @@ The native CLI also maps `SHAKE-128` and `SHAKE-256` to the corresponding
 prehash. The Python/API oracle rejects SHAKE for external preHash because this
 API does not carry an explicit SHAKE output length.
 
+## Phase 2-7 generic expectedResults coverage
+
+The generic endpoint dispatches by prompt `mode`:
+
+```text
+POST /api/oracle/mldsa/expected-results
+```
+
+Supported sigGen combinations:
+
+```text
+internal externalMu=false deterministic=true
+internal externalMu=false deterministic=false
+internal externalMu=true  deterministic=true
+internal externalMu=true  deterministic=false
+external pure             deterministic=true
+external pure             deterministic=false
+external preHash          deterministic=true
+external preHash          deterministic=false
+```
+
+Supported sigVer combinations:
+
+```text
+internal externalMu=false
+internal externalMu=true
+external pure
+external preHash
+```
+
+The existing keyGen-only endpoint remains available:
+
+```text
+POST /api/oracle/mldsa/keygen/expected-results
+```
+
+Current limitation: generic sigGen/sigVer external preHash follows the
+Python/API oracle limitation for SHAKE and rejects `SHAKE-128` / `SHAKE-256`
+because this API does not carry an explicit SHAKE output length.
+
 ## Current non-goals
 
 The backend does not currently include:
 
 - `/acvp/v1/testSessions`
+- Registration negotiation
 - Database persistence
 - JWT authentication
-- sigGen expectedResults generator
-- sigVer expectedResults generator
-- generic expectedResults endpoint
 - Full ACVP vector set lifecycle

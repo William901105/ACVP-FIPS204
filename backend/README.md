@@ -9,11 +9,11 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-## ML-DSA keyGen oracle
+## ML-DSA oracle
 
-This backend includes a local crypto oracle integration for ML-DSA
-`keyGen_internal` using the external `mldsa-native` checkout at
-`/root/ACVP204/mldsa-native`.
+This backend includes local crypto oracle integration for ML-DSA keyGen,
+sigGen, sigVer, and expectedResults generation using the external
+`mldsa-native` checkout at `/root/ACVP204/mldsa-native`.
 
 Build the native oracle binaries:
 
@@ -54,4 +54,6 @@ Current scope:
 
 - This is only a crypto oracle integration, not a formal ACVP
   session/vector set lifecycle implementation.
-- Only ML-DSA keyGen is supported. sigGen and sigVer are not implemented.
+- Single-case ML-DSA keyGen, sigGen, and sigVer endpoints are supported.
+- `POST /api/oracle/mldsa/expected-results` generates keyGen, sigGen, and
+  sigVer expectedResults for validated ML-DSA prompt vector sets.

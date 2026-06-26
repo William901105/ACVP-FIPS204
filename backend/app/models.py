@@ -71,6 +71,17 @@ class MldsaKeygenExpectedResultsResponse(BaseModel):
     expectedResults: JsonObject
 
 
+class MldsaExpectedResultsRequest(BaseModel):
+    prompt: JsonObject
+
+
+class MldsaExpectedResultsResponse(BaseModel):
+    algorithm: Literal["ML-DSA"] = "ML-DSA"
+    mode: str
+    revision: Literal["FIPS204"] = "FIPS204"
+    expectedResults: JsonObject
+
+
 class MldsaSigGenRequest(BaseModel):
     parameterSet: Literal["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"]
     signatureInterface: Literal["internal", "external"] = "internal"

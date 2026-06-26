@@ -9,7 +9,10 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from .acvp_mldsa.errors import AcvpSchemaError
-from .acvp_mldsa.expected import generate_keygen_expected_results_from_prompt
+from .acvp_mldsa.expected import (
+    generate_expected_results_from_prompt,
+    generate_keygen_expected_results_from_prompt,
+)
 from .acvp_mldsa.validators import (
     validate_mldsa_registration,
     validate_mldsa_response,
@@ -28,6 +31,8 @@ from .models import (
     ImportRequest,
     ImportSummary,
     LoadSampleRequest,
+    MldsaExpectedResultsRequest,
+    MldsaExpectedResultsResponse,
     MldsaKeygenExpectedResultsRequest,
     MldsaKeygenExpectedResultsResponse,
     MldsaKeygenRequest,
@@ -131,6 +136,29 @@ def mldsa_keygen_expected_results(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return MldsaKeygenExpectedResultsResponse(expectedResults=expected_results)
+
+
+@app.post(
+    "/api/oracle/mldsa/expected-results",
+    response_model=MldsaExpectedResultsResponse,
+)
+def mldsa_expected_results(
+    payload: MldsaExpectedResultsRequest,
+) -> MldsaExpectedResultsResponse:
+    try:
+        vector_set = validate_mldsa_vector_set(payload.prompt)
+        expected_results = generate_expected_results_from_prompt(payload.prompt)
+    except AcvpSchemaError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_dict()) from exc
+    except MldsaOracleInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MldsaOracleError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return MldsaExpectedResultsResponse(
+        mode=vector_set["mode"],
+        expectedResults=expected_results,
+    )
 
 
 @app.post("/api/oracle/mldsa/siggen", response_model=MldsaSigGenResponse)
