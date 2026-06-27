@@ -1,6 +1,6 @@
 # ACVP v1 Capabilities Negotiation
 
-Phase 3-3 added a local ML-DSA registration/capabilities negotiation layer for the `/acvp/v1` skeleton. Phase 3-4 can use the negotiated plan to generate deterministic local vector sets, and Phase 3-5 attaches those sessions to the local state machine. This remains based on the NIST ACVP Protocol Specification registration/capabilities exchange model and the NIST ACVP ML-DSA JSON Specification, and it is still not a production-ready ACVP server.
+Phase 3-3 added a local ML-DSA registration/capabilities negotiation layer for the `/acvp/v1` skeleton. Phase 3-4 can use the negotiated plan to generate deterministic local vector sets, Phase 3-5 attaches those sessions to the local state machine, and Phase 4-1 persists them in SQLite. This remains based on the NIST ACVP Protocol Specification registration/capabilities exchange model and the NIST ACVP ML-DSA JSON Specification, and it is still not a production-ready ACVP server.
 
 References:
 
@@ -9,7 +9,7 @@ References:
 - ACVP documentation landing page: https://pages.nist.gov/ACVP/
 - FIPS 204: https://csrc.nist.gov/pubs/fips/204/final
 
-Every Phase 3-3 response still includes:
+Every response still includes:
 
 ```json
 {
@@ -56,7 +56,7 @@ The current schema treats length domains as bit domains. `messageLength` must st
 - prompt-based Phase 3-2 sessions with `prompt`
 - registration/capabilities Phase 3-3 sessions with `algorithms`
 
-With `autoGenerateVectorSets=false`, the server creates an in-memory capabilities-only session with:
+With `autoGenerateVectorSets=false`, the server creates a SQLite-backed capabilities-only session with:
 
 ```json
 {
@@ -94,12 +94,12 @@ If a registration requests only unsupported generated hash capabilities, the ske
 
 ## Exclusions
 
-Phase 3-3 intentionally does not include:
+This local skeleton intentionally does not include:
 
 - formal random vector generation
-- DB persistence
+- production database deployment
 - JWT/login/mTLS
 - vendor/module/OE/dependency resources
 - production ACVP certification workflow
 
-Next phase: Phase 3-5 formal testSession/vectorSet state machine.
+Next protocol-hardening phase: Phase 4-3 paging/query/error behavior.

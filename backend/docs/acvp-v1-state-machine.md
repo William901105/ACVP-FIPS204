@@ -1,6 +1,6 @@
 # ACVP v1 Local State Machine
 
-Phase 3-5 adds a formal local state machine for `/acvp/v1` test sessions and vector sets. It is aligned with the NIST ACVP Protocol Specification sections for Test Sessions, Vector Sets, paging/query parameters, and errors where the local skeleton has matching resources. It is not a production ACVP server.
+Phase 3-5 adds a formal local state machine for `/acvp/v1` test sessions and vector sets. Phase 4-1 persists that local state machine in SQLite. It is aligned with the NIST ACVP Protocol Specification sections for Test Sessions, Vector Sets, paging/query parameters, and errors where the local skeleton has matching resources. It is not a production ACVP server.
 
 References:
 
@@ -23,7 +23,7 @@ Every `/acvp/v1` response still includes:
 
 Implemented as local skeleton behavior:
 
-- in-memory testSession/vectorSet lifecycle
+- SQLite-backed testSession/vectorSet lifecycle
 - deterministic vector generation from negotiated ML-DSA capabilities
 - vector download marking
 - vector result submission with synchronous local validation
@@ -31,10 +31,11 @@ Implemented as local skeleton behavior:
 - soft cancel for sessions and vector sets
 - configurable `expiresInSeconds`
 - state history events on sessions and vector sets
+- SQLite `state_events` rows for local transition history
 
 Not implemented in this phase:
 
-- DB persistence
+- production database deployment
 - JWT, login, mTLS, or production authorization
 - vendor/module/OE/dependency CRUD
 - async or large submission processing
@@ -119,7 +120,7 @@ Sessions and vector sets include `stateHistory`:
 }
 ```
 
-Required fields are `at`, `event`, `from`, `to`, and `reason`. Production systems need durable audit storage, retention policy, and tamper controls; this phase keeps events in memory.
+Required fields are `at`, `event`, `from`, `to`, and `reason`. Phase 4-1 also writes local transition records to the SQLite `state_events` table. Production systems still need audit retention policy, tamper controls, and operational hardening.
 
 ## Endpoints
 
@@ -213,7 +214,6 @@ Expired sessions return `409 TEST_SESSION_EXPIRED`. Expired vector sets return `
 
 ## Follow-Up Phases
 
-- Phase 4-1: DB persistence for sessions, vector sets, submissions, and state history.
 - Phase 4-2: JWT/login/mTLS and authorization boundaries.
 - Phase 4-3: paging, query parameters, and production error format hardening.
 - Phase 4-4: async validation and large submission handling.
@@ -223,7 +223,7 @@ Expired sessions return `409 TEST_SESSION_EXPIRED`. Expired vector sets return `
 Build native oracle:
 
 ```bash
-cd /root/ACVP204/fips204-acvp-web-demo/backend/native/mldsa_oracle
+cd /root/ACVP204/ACVP-FIPS204/backend/native/mldsa_oracle
 make clean
 make MLDSA_NATIVE_DIR=/root/ACVP204/mldsa-native
 ```
@@ -231,14 +231,15 @@ make MLDSA_NATIVE_DIR=/root/ACVP204/mldsa-native
 Run tests:
 
 ```bash
-cd /root/ACVP204/fips204-acvp-web-demo/backend
+cd /root/ACVP204/ACVP-FIPS204/backend
 source .venv/bin/activate
-pytest -q
-pytest -q tests/test_acvp_v1_state_machine.py
+ACVP_DB_PATH=/tmp/acvp_phase41_test.sqlite3 pytest -q
+ACVP_DB_PATH=/tmp/acvp_phase41_test.sqlite3 pytest -q tests/test_acvp_v1_state_machine.py
 ```
 
 Start backend:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+ACVP_DB_PATH=/tmp/acvp_phase41_manual.sqlite3 \
+  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```

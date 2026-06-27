@@ -193,6 +193,22 @@ def add_state_event(
     if metadata:
         entry["metadata"] = metadata
     entity.setdefault("stateHistory", []).append(entry)
+    storage_identity = _state_event_storage_identity(entity)
+    if storage_identity is not None:
+        entity_type, entity_id = storage_identity
+        from ..storage.sqlite_store import record_state_event
+
+        details: Dict[str, Any] = {"reason": reason}
+        if metadata:
+            details["metadata"] = metadata
+        record_state_event(
+            entity_type,
+            entity_id,
+            from_status,
+            to_status,
+            event,
+            details=details,
+        )
 
 
 def transition_session(
@@ -357,3 +373,13 @@ def _session_path(session: Dict[str, Any]) -> str:
 def _vector_path(vector_set: Dict[str, Any]) -> str:
     vector_set_id = vector_set.get("vectorSetId", "<unknown>")
     return f"/acvp/v1/vectorSets/{vector_set_id}"
+
+
+def _state_event_storage_identity(entity: Dict[str, Any]) -> Optional[tuple[str, str]]:
+    if entity.get("vectorSetId") is not None:
+        return ("acvp_vector_set", str(entity["vectorSetId"]))
+    if entity.get("testSessionId") is not None:
+        return ("acvp_session", str(entity["testSessionId"]))
+    if entity.get("sessionId") is not None:
+        return ("demo_session", str(entity["sessionId"]))
+    return None

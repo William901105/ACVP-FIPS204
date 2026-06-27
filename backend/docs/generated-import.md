@@ -5,7 +5,8 @@ expectedResults generator.
 
 This is still a local validation demo. It is not an ACVP production lifecycle,
 does not implement `/acvp/v1/testSessions`, and does not add registration
-negotiation, JWT, certificates, or database persistence.
+negotiation, JWT, certificates, or production ACVP authentication. Phase 4-1
+stores imported/generated bundles, validation results, and reports in SQLite.
 
 ## Endpoints
 
@@ -30,11 +31,11 @@ The backend:
 2. Generates expectedResults with `generate_expected_results_from_prompt()`.
 3. Validates the generated expectedResults schema.
 4. Validates the submitted response schema for the prompt mode.
-5. Stores the bundle in memory with `generatedExpectedResults: true`.
+5. Stores the bundle in SQLite with `generatedExpectedResults: true`.
 6. Returns the normal `ImportSummary`.
 
 `POST /api/import/generated-and-validate` runs the same import path, immediately
-executes validation, stores the validation result and report, and returns:
+executes validation, stores the validation result and report in SQLite, and returns:
 
 ```json
 {
@@ -93,9 +94,10 @@ appear in `failureDetails` with reason `extra response test case`.
 ## Manual Check
 
 ```bash
-cd /root/ACVP204/fips204-acvp-web-demo/backend
+cd /root/ACVP204/ACVP-FIPS204/backend
 source .venv/bin/activate
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+ACVP_DB_PATH=/tmp/acvp_phase41_manual.sqlite3 \
+  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Then post a prompt/response pair:
@@ -107,3 +109,5 @@ curl -s -X POST http://127.0.0.1:8000/api/import/generated-and-validate \
 ```
 
 The response should include `import`, `validationResult`, and `report`.
+Restarting the backend with the same `ACVP_DB_PATH` should preserve
+`GET /api/import/{importId}` and `GET /api/report/{importId}`.

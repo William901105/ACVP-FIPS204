@@ -1,6 +1,6 @@
 # ACVP v1 Vector Generation
 
-Phase 3-4 added deterministic local skeleton vector generation from negotiated ML-DSA capabilities. Phase 3-5 keeps that behavior and attaches it to the formal local testSession/vectorSet state machine. It follows the NIST ACVP Protocol Specification and the NIST ACVP ML-DSA JSON Specification where those documents define the payload shape. This is not a production-ready ACVP server.
+Phase 3-4 added deterministic local skeleton vector generation from negotiated ML-DSA capabilities. Phase 3-5 keeps that behavior and attaches it to the formal local testSession/vectorSet state machine. Phase 4-1 persists generated sessions, vector sets, submissions, results, reports, and state events in SQLite. It follows the NIST ACVP Protocol Specification and the NIST ACVP ML-DSA JSON Specification where those documents define the payload shape. This is not a production-ready ACVP server.
 
 References:
 
@@ -158,9 +158,9 @@ Vector generation does not use wall-clock time for vector bytes. The Phase 3-5 c
 
 ## Exclusions
 
-Phase 3-5 still does not include:
+The local skeleton still does not include:
 
-- DB persistence
+- production database deployment
 - JWT/login/mTLS
 - production ACVP lifecycle
 - vendor/module/OE/dependency resources
@@ -169,4 +169,4 @@ Phase 3-5 still does not include:
 - formal paging/query/error hardening
 - async or large submission handling
 
-See `backend/docs/acvp-v1-state-machine.md` for the supported local skeleton lifecycle. DB persistence remains Phase 4-1, auth/JWT/mTLS remains Phase 4-2, paging/query/error hardening remains Phase 4-3, and async/large submission remains Phase 4-4.
+See `backend/docs/acvp-v1-state-machine.md` for the supported local skeleton lifecycle. SQLite persistence is Phase 4-1, auth/JWT/mTLS remains Phase 4-2, paging/query/error hardening remains Phase 4-3, and async/large submission remains Phase 4-4.

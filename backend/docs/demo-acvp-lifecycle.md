@@ -1,15 +1,16 @@
 # Local ACVP-Like Demo Lifecycle
 
-Phase 2-9 adds an in-memory demo lifecycle under `/api/demo/acvp`.
+Phase 2-9 added a demo lifecycle under `/api/demo/acvp`. Phase 4-1 persists
+that local lifecycle in SQLite.
 
 This is explicitly a local demo. It is not a production ACVP server and does
 not implement the official ACVP `/acvp/v1/testSessions` protocol. Responses
 include `demoOnly: true` and `notProductionAcvp: true` to keep that boundary
 visible.
 
-No JWT, TLS/auth, database persistence, registration negotiation, metadata
-submission, certificate workflow, frontend change, or `mldsa-native` change is
-included in this phase.
+No JWT, TLS/auth, production ACVP registration negotiation, metadata submission,
+certificate workflow, frontend change, or `mldsa-native` change is included in
+this phase.
 
 ## Endpoints
 
@@ -51,7 +52,7 @@ expectedResults data is needed.
 ```
 
 The backend validates the response schema against the prompt mode, stores it in
-the in-memory session, and optionally runs validation immediately.
+the SQLite-backed session, and optionally runs validation immediately.
 
 Matching responses return status `validated`. Responses with failed, missing,
 malformed, or extra cases return status `failed` with the validation summary.
@@ -98,9 +99,10 @@ submitted response data.
 ## Manual Check
 
 ```bash
-cd /root/ACVP204/fips204-acvp-web-demo/backend
+cd /root/ACVP204/ACVP-FIPS204/backend
 source .venv/bin/activate
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+ACVP_DB_PATH=/tmp/acvp_phase41_manual.sqlite3 \
+  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Create a session:

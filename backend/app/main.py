@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
@@ -50,13 +51,32 @@ from .models import (
 )
 from .report import build_report
 from .sample_loader import SampleLoaderError, list_sample_data, load_sample
+from .storage.sqlite_store import (
+    DEMO_SESSION_STORE,
+    IMPORT_STORE,
+    delete_demo_session as delete_demo_session_record,
+    get_import_record,
+    init_db,
+    list_demo_sessions as list_demo_session_records,
+    record_state_event,
+    save_demo_session,
+    save_import_record,
+    update_import_validation,
+)
 from .validator import validate
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
 
 
 app = FastAPI(
     title="FIPS 204 / ML-DSA ACVP JSON Viewer + Local Validator",
     version="0.1.0",
     description="Local JSON comparison demo for ML-DSA ACVP prompt, expectedResults, and response files.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -73,9 +93,6 @@ app.add_middleware(
 )
 
 app.include_router(acvp_v1_router)
-
-IMPORT_STORE: Dict[str, Dict[str, Any]] = {}
-DEMO_SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 
 
 @app.get("/api/health")
@@ -270,6 +287,7 @@ def import_generated_keygen_bundle(payload: GeneratedKeygenImportRequest) -> Any
             "expectedResults": expected_results,
             "response": payload.response,
             "label": payload.label,
+            "generatedExpectedResults": True,
         }
         return _store_import(bundle)
     except AcvpSchemaError as exc:
@@ -307,6 +325,8 @@ def import_generated_mldsa_bundle_and_validate(
         report = build_report(imported.importId, validation_result)
         bundle["validationResult"] = validation_result
         bundle["report"] = report
+        update_import_validation(imported.importId, validation_result, report)
+        _record_import_validation_event(imported.importId, validation_result)
     except AcvpSchemaError as exc:
         raise HTTPException(status_code=400, detail=exc.to_dict()) from exc
     except MldsaOracleInputError as exc:
@@ -332,6 +352,8 @@ def validate_import(payload: ValidateRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     bundle["validationResult"] = result
     bundle["report"] = build_report(payload.importId, result)
+    update_import_validation(payload.importId, result, bundle["report"])
+    _record_import_validation_event(payload.importId, result)
     return result
 
 
@@ -355,10 +377,12 @@ def get_import(import_id: str) -> Dict[str, Any]:
 @app.get("/api/report/{import_id}")
 def get_report(import_id: str) -> Dict[str, Any]:
     bundle = _get_bundle(import_id)
-    if "report" not in bundle:
+    if bundle.get("report") is None:
         result = validate(bundle)
         bundle["validationResult"] = result
         bundle["report"] = build_report(import_id, result)
+        update_import_validation(import_id, result, bundle["report"])
+        _record_import_validation_event(import_id, result)
     return bundle["report"]
 
 
@@ -408,7 +432,15 @@ def create_demo_acvp_session(payload: DemoAcvpSessionCreateRequest) -> Dict[str,
         "demoOnly": True,
         "notProductionAcvp": True,
     }
-    DEMO_SESSION_STORE[session_id] = session
+    save_demo_session(session)
+    record_state_event(
+        "demo_session",
+        session_id,
+        None,
+        session["status"],
+        "created",
+        details={"reason": "Demo ACVP session created."},
+    )
     return _demo_session_summary(session)
 
 
@@ -419,7 +451,7 @@ def list_demo_acvp_sessions() -> Dict[str, Any]:
         "notProductionAcvp": True,
         "sessions": [
             _demo_session_summary(session)
-            for session in DEMO_SESSION_STORE.values()
+            for session in list_demo_session_records()
         ],
     }
 
@@ -459,6 +491,16 @@ def submit_demo_acvp_session_response(
     validation_result = None
     if payload.validateImmediately:
         validation_result = _validate_demo_session(session)
+    else:
+        save_demo_session(session)
+        record_state_event(
+            "demo_session",
+            session_id,
+            None,
+            session["status"],
+            "responseSubmitted",
+            details={"reason": "Demo response submitted without immediate validation."},
+        )
 
     return {
         "sessionId": session_id,
@@ -500,8 +542,16 @@ def get_demo_acvp_session_report(session_id: str) -> Dict[str, Any]:
 
 @app.delete("/api/demo/acvp/test-sessions/{session_id}")
 def delete_demo_acvp_session(session_id: str) -> Dict[str, Any]:
-    _get_demo_session(session_id)
-    del DEMO_SESSION_STORE[session_id]
+    session = _get_demo_session(session_id)
+    delete_demo_session_record(session_id)
+    record_state_event(
+        "demo_session",
+        session_id,
+        session.get("status"),
+        "deleted",
+        "deleted",
+        details={"reason": "Demo ACVP session deleted."},
+    )
     return {
         "deleted": True,
         "sessionId": session_id,
@@ -545,6 +595,15 @@ def _validate_demo_session(session: Dict[str, Any]) -> Dict[str, Any]:
     session["updatedAt"] = _timestamp()
     session["status"] = (
         "validated" if _validation_passed(validation_result) else "failed"
+    )
+    save_demo_session(session)
+    record_state_event(
+        "demo_session",
+        session["sessionId"],
+        "responseSubmitted",
+        session["status"],
+        "validated" if session["status"] == "validated" else "failed",
+        details={"reason": "Demo response validated synchronously."},
     )
     return validation_result
 
@@ -608,8 +667,23 @@ def _store_import(bundle: Dict[str, Any]) -> ImportSummary:
     normalize_acvp_json(bundle["response"])
 
     import_id = str(uuid4())
-    IMPORT_STORE[import_id] = bundle
-    return _summarize_bundle(import_id, bundle)
+    now = _timestamp()
+    record = {
+        **bundle,
+        "importId": import_id,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    save_import_record(record)
+    record_state_event(
+        "import",
+        import_id,
+        None,
+        "imported",
+        "created",
+        details={"reason": "Import bundle stored."},
+    )
+    return _summarize_bundle(import_id, record)
 
 
 def _summarize_bundle(import_id: str, bundle: Dict[str, Any]) -> ImportSummary:
@@ -618,10 +692,22 @@ def _summarize_bundle(import_id: str, bundle: Dict[str, Any]) -> ImportSummary:
 
 
 def _get_bundle(import_id: str) -> Dict[str, Any]:
-    bundle = IMPORT_STORE.get(import_id)
+    bundle = get_import_record(import_id)
     if bundle is None:
         raise HTTPException(status_code=404, detail="Unknown importId")
     return bundle
+
+
+def _record_import_validation_event(import_id: str, validation_result: Dict[str, Any]) -> None:
+    status = "validated" if _validation_passed(validation_result) else "failed"
+    record_state_event(
+        "import",
+        import_id,
+        "imported",
+        status,
+        status,
+        details={"summary": validation_result.get("summary", {})},
+    )
 
 
 def _schema_error_response(exc: AcvpSchemaError) -> JSONResponse:

@@ -1,6 +1,6 @@
 # ACVP v1 Skeleton
 
-Phase 3-2 added a formal `/acvp/v1` namespace as a local skeleton. Phase 3-3 extended it with local ML-DSA registration/capabilities negotiation. Phase 3-4 added deterministic local vector generation from negotiated capabilities. Phase 3-5 adds a formal in-memory local state machine for test sessions and vector sets. It is not a production-ready ACVP server and every response includes:
+Phase 3-2 added a formal `/acvp/v1` namespace as a local skeleton. Phase 3-3 extended it with local ML-DSA registration/capabilities negotiation. Phase 3-4 added deterministic local vector generation from negotiated capabilities. Phase 3-5 added a formal local state machine for test sessions and vector sets. Phase 4-1 stores sessions, vector sets, submissions, validation results, reports, and state events in SQLite. It is not a production-ready ACVP server and every response includes:
 
 ```json
 {
@@ -24,7 +24,7 @@ References:
 | --- | --- | --- |
 | GET | `/acvp/v1/version` | Returns local skeleton protocol/version metadata. |
 | GET | `/acvp/v1/algorithms` | Returns ML-DSA capability summary for the local implementation. |
-| GET | `/acvp/v1/testSessions` | Lists in-memory skeleton sessions. |
+| GET | `/acvp/v1/testSessions` | Lists SQLite-backed skeleton sessions. |
 | POST | `/acvp/v1/testSessions` | Creates a local prompt-based skeleton session or a registration session that can generate vector sets. |
 | GET | `/acvp/v1/testSessions/{sessionId}` | Returns skeleton session detail and vector set metadata. |
 | GET | `/acvp/v1/testSessions/{sessionId}/vectorSets` | Lists vector sets for a skeleton session; registration-only sessions return an empty list and Phase 3-5 next action. |
@@ -35,7 +35,7 @@ References:
 | GET | `/acvp/v1/vectorSets/{vectorSetId}/expectedResults` | Returns generated expectedResults as local skeleton behavior. Production ACVP handling requires spec review. |
 | GET | `/acvp/v1/testSessions/{sessionId}/results` | Aggregates local vector set results; registration-only sessions return `409 VECTOR_SETS_NOT_GENERATED`. |
 | POST | `/acvp/v1/testSessions/{sessionId}/submit` | Performs local session-level submit-for-validation aggregate finalization. |
-| DELETE | `/acvp/v1/testSessions/{sessionId}` | Soft-cancels the in-memory skeleton session and non-terminal vector sets. |
+| DELETE | `/acvp/v1/testSessions/{sessionId}` | Soft-cancels the SQLite-backed skeleton session and non-terminal vector sets. |
 | DELETE | `/acvp/v1/vectorSets/{vectorSetId}` | Soft-cancels one vector set; all-cancelled sessions become `cancelled`. |
 
 ## Create Session Example
@@ -187,7 +187,11 @@ created -> capabilitiesAccepted -> vectorReady -> vectorDownloaded -> resultsSub
 created -> ready -> downloaded -> resultsSubmitted -> validating -> validated/failed
 ```
 
-State changes append `stateHistory` events with `at`, `event`, `from`, `to`, and `reason`. Illegal state transitions return `409` local skeleton errors. Full details are in `backend/docs/acvp-v1-state-machine.md`.
+State changes append `stateHistory` events with `at`, `event`, `from`, `to`, and `reason`, and Phase 4-1 also writes those transitions to the SQLite `state_events` table. Illegal state transitions return `409` local skeleton errors. Full details are in `backend/docs/acvp-v1-state-machine.md`.
+
+## SQLite Persistence
+
+Phase 4-1 persists local skeleton state in SQLite. The default DB path is `backend/data/acvp.sqlite3`; set `ACVP_DB_PATH=/path/to/acvp.sqlite3` to override it. Reusing the same DB path across backend restarts preserves test sessions, vector sets, submitted responses, validation results, reports, cancellation/expiration state, and state events.
 
 ## Soft Cancel And Expiration
 
@@ -201,7 +205,7 @@ The skeleton intentionally does not include:
 
 - login/JWT
 - mTLS
-- DB persistence
+- production PostgreSQL/database deployment
 - official production ACVP certification workflow
 - vendor/module/OE/dependency CRUD
 - async or large submission handling
@@ -209,7 +213,6 @@ The skeleton intentionally does not include:
 
 Planned follow-up phases:
 
-- Phase 4-1 DB persistence
 - Phase 4-2 auth/JWT/mTLS
 - Phase 4-3 paging/error/query
 - Phase 4-4 async/large submission

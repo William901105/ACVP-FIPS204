@@ -24,6 +24,7 @@ def test_acvp_conformance_matrix_has_required_status_values() -> None:
 
     for status in (
         "SUPPORTED",
+        "SUPPORTED-LOCAL",
         "PARTIAL",
         "MISSING",
         "LOCAL_DEMO_ONLY",
@@ -39,7 +40,7 @@ def test_acvp_conformance_matrix_declares_demo_and_skeleton_not_production() -> 
     assert "`/api/demo/acvp/...` routes are a local demo lifecycle" in text
     assert "not formal ACVP endpoints" in text
     assert "`/acvp/v1/...` routes are skeleton endpoints" in text
-    assert "Phase 3-4 vector generation and Phase 3-5 lifecycle state" in text
+    assert "Phase 3-4 vector generation, Phase 3-5 lifecycle state, and Phase 4-1 SQLite persistence" in text
     assert "deterministic/local-fips204-skeleton behavior" in text
     assert "not a production-ready server" in text
 
