@@ -55,6 +55,7 @@ export default function App() {
   const isEnabled = config.enabled;
   const activeVectorSummary = vectorSets.find((item) => item.vectorSetId === activeVectorSetId) ?? null;
   const activeReport = vectorResult?.report ?? null;
+  const canUploadResponse = Boolean(activeSession && activeVectorSetId) && !isBusy;
 
   useEffect(() => {
     setSelectedModes(config.modes.filter((mode) => mode.enabled).slice(0, 1).map((mode) => mode.id));
@@ -354,10 +355,24 @@ export default function App() {
             <h2>IUT Response</h2>
             <span className="state-chip ready">{uploadedResponseName ? "loaded" : "waiting"}</span>
           </div>
-          <label className="file-button">
+          <label
+            className={`file-button ${canUploadResponse ? "" : "disabled"}`}
+            aria-disabled={!canUploadResponse}
+          >
             <span>Upload response JSON</span>
-            <input type="file" accept="application/json,.json" disabled={!activeVectorSetId || isBusy} onChange={(event) => loadResponseFile(event.target.files?.[0] ?? null)} />
+            <input
+              type="file"
+              accept="application/json,.json"
+              disabled={!canUploadResponse}
+              onChange={(event) => loadResponseFile(event.target.files?.[0] ?? null)}
+            />
           </label>
+
+          {!activeSession ? (
+            <p className="subtle">Select a Test Session before uploading a response JSON.</p>
+          ) : !activeVectorSetId ? (
+            <p className="subtle">Select a Vector Set before uploading a response JSON.</p>
+          ) : null}
           {uploadedResponseName ? <p className="subtle">{uploadedResponseName}</p> : null}
           <button type="button" onClick={submitResponse} disabled={!activeVectorSetId || uploadedResponse == null || isBusy}>
             Validate response

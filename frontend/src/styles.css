@@ -229,6 +229,18 @@ select {
   font-weight: 800;
 }
 
+.file-button.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: #b9c4c8;
+  color: #64727b;
+  background: #eef2f3;
+}
+
+.file-button.disabled span {
+  cursor: not-allowed;
+}
+
 .file-button input {
   position: absolute;
   width: 1px;

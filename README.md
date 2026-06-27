@@ -40,7 +40,7 @@ The validator does not run ML-DSA cryptographic operations. It only compares res
 ## Project Structure
 
 ```text
-fips204-acvp-web-demo/
+ACVP-FIPS204/
   backend/
     app/
       main.py
@@ -74,7 +74,7 @@ fips204-acvp-web-demo/
 ## Install Backend
 
 ```bash
-cd fips204-acvp-web-demo/backend
+cd ACVP-FIPS204/backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -83,7 +83,7 @@ pip install -r requirements.txt
 On Windows PowerShell:
 
 ```powershell
-cd fips204-acvp-web-demo/backend
+cd ACVP-FIPS204/backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -92,14 +92,14 @@ pip install -r requirements.txt
 ## Start Backend
 
 ```bash
-cd fips204-acvp-web-demo/backend
+cd ACVP-FIPS204/backend
 uvicorn app.main:app --reload --port 8000
 ```
 
 The same command also works from the project root:
 
 ```bash
-cd fips204-acvp-web-demo
+cd ACVP-FIPS204
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -108,14 +108,14 @@ The backend enables CORS for `localhost:5173`, `127.0.0.1:5173`, `localhost:3000
 ## Install Frontend
 
 ```bash
-cd fips204-acvp-web-demo/frontend
+cd ACVP-FIPS204/frontend
 npm install
 ```
 
 ## Start Frontend
 
 ```bash
-cd fips204-acvp-web-demo/frontend
+cd ACVP-FIPS204/frontend
 npm run dev
 ```
 
