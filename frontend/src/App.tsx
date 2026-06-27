@@ -29,6 +29,9 @@ import type {
 
 const DEFAULT_TESTS_PER_GROUP = 1;
 const DEFAULT_CAMPAIGN_SEED = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
+const CAMPAIGN_SEED_EXAMPLE = DEFAULT_CAMPAIGN_SEED;
+
+type IutResponseStatus = "waiting" | "loaded" | "ready" | "error";
 
 export default function App() {
   const [fipsId, setFipsId] = useState<FipsVersionId>("FIPS204");
@@ -46,6 +49,8 @@ export default function App() {
   const [expectedResults, setExpectedResults] = useState<AcvpExpectedResults | null>(null);
   const [uploadedResponse, setUploadedResponse] = useState<JsonValue | null>(null);
   const [uploadedResponseName, setUploadedResponseName] = useState("");
+  const [iutResponseStatus, setIutResponseStatus] = useState<IutResponseStatus>("waiting");
+  const [iutResponseErrorDetail, setIutResponseErrorDetail] = useState("");
   const [promptImportName, setPromptImportName] = useState("");
   const [vectorResult, setVectorResult] = useState<AcvpVectorSetResult | null>(null);
   const [sessionResults, setSessionResults] = useState<AcvpSessionResults | null>(null);
@@ -56,6 +61,9 @@ export default function App() {
   const activeVectorSummary = vectorSets.find((item) => item.vectorSetId === activeVectorSetId) ?? null;
   const activeReport = vectorResult?.report ?? null;
   const canUploadResponse = Boolean(activeSession && activeVectorSetId) && !isBusy;
+  const campaignSeedValidation = useMemo(() => validateCampaignSeed(campaignSeed), [campaignSeed]);
+  const campaignSeedInvalid = isEnabled && !campaignSeedValidation.valid;
+  const iutResponseLabel = responseStatusLabel(iutResponseStatus);
 
   useEffect(() => {
     setSelectedModes(config.modes.filter((mode) => mode.enabled).slice(0, 1).map((mode) => mode.id));
@@ -83,11 +91,15 @@ export default function App() {
       setMessage("Select at least one mode and one parameter set.");
       return;
     }
+    if (!campaignSeedValidation.valid) {
+      setMessage(campaignSeedValidation.message);
+      return;
+    }
     await runBusy(async () => {
       const payload = {
         algorithms: buildRegistrationAlgorithms(config, selectedModes, selectedParameterSets),
         label,
-        campaignSeed: campaignSeed || undefined,
+        campaignSeed: campaignSeed.trim() || undefined,
         testsPerGroup,
         autoGenerateVectorSets: true
       };
@@ -126,6 +138,8 @@ export default function App() {
       setVectorResult(null);
       setUploadedResponse(null);
       setUploadedResponseName("");
+      setIutResponseStatus("waiting");
+      setIutResponseErrorDetail("");
       const firstVectorId = vectors[0]?.vectorSetId ?? null;
       setActiveVectorSetId(firstVectorId);
       if (firstVectorId) {
@@ -152,6 +166,8 @@ export default function App() {
     setVectorResult(null);
     setUploadedResponse(null);
     setUploadedResponseName("");
+    setIutResponseStatus("waiting");
+    setIutResponseErrorDetail("");
     if (sessionId) {
       setVectorSets(await getAcvpSessionVectorSets(sessionId));
     }
@@ -164,9 +180,16 @@ export default function App() {
     try {
       setUploadedResponse(await readJsonFile(file));
       setUploadedResponseName(file.name);
+      setIutResponseStatus("loaded");
+      setIutResponseErrorDetail("");
+      setVectorResult(null);
+      setSessionResults(null);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Invalid response JSON.");
+      const errorMessage = error instanceof Error ? error.message : "Invalid response JSON.";
+      setIutResponseStatus("error");
+      setIutResponseErrorDetail(errorMessage);
+      setMessage(errorMessage);
     }
   }
 
@@ -178,12 +201,17 @@ export default function App() {
     await runBusy(async () => {
       const result = await submitAcvpVectorSetResults(activeVectorSetId, uploadedResponse);
       setVectorResult(result);
+      setIutResponseStatus(validationPassed(result) ? "ready" : "loaded");
+      setIutResponseErrorDetail("");
       if (activeSession) {
         setActiveSession(await getAcvpSession(activeSession.testSessionId));
         setVectorSets(await getAcvpSessionVectorSets(activeSession.testSessionId));
         setSessionResults(await getAcvpSessionResults(activeSession.testSessionId));
       }
       setMessage("Response validated.");
+    }, (errorMessage) => {
+      setIutResponseStatus("error");
+      setIutResponseErrorDetail(errorMessage);
     });
   }
 
@@ -195,19 +223,23 @@ export default function App() {
     setExpectedResults(null);
     setUploadedResponse(null);
     setUploadedResponseName("");
+    setIutResponseStatus("waiting");
+    setIutResponseErrorDetail("");
     setPromptImportName("");
     setVectorResult(null);
     setSessionResults(null);
     setMessage("");
   }
 
-  async function runBusy(work: () => Promise<void>) {
+  async function runBusy(work: () => Promise<void>, onError?: (message: string) => void) {
     setIsBusy(true);
     setMessage("");
     try {
       await work();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Operation failed.");
+      const errorMessage = error instanceof Error ? error.message : "Operation failed.";
+      setMessage(errorMessage);
+      onError?.(errorMessage);
     } finally {
       setIsBusy(false);
     }
@@ -263,9 +295,18 @@ export default function App() {
             <span>Label</span>
             <input value={label} onChange={(event) => setLabel(event.target.value)} disabled={!isEnabled || isBusy} />
           </label>
-          <label className="field">
+          <label className={`field ${campaignSeedInvalid ? "invalid" : ""}`}>
             <span>Campaign seed</span>
-            <input value={campaignSeed} onChange={(event) => setCampaignSeed(event.target.value)} disabled={!isEnabled || isBusy} />
+            <input
+              value={campaignSeed}
+              onChange={(event) => setCampaignSeed(event.target.value)}
+              disabled={!isEnabled || isBusy}
+              aria-invalid={campaignSeedInvalid}
+              aria-describedby="campaign-seed-hint"
+            />
+            <small id="campaign-seed-hint" className={campaignSeedInvalid ? "field-error" : "field-hint"}>
+              {campaignSeedValidation.message}
+            </small>
           </label>
           <label className="field short">
             <span>Tests per group</span>
@@ -278,12 +319,21 @@ export default function App() {
               disabled={!isEnabled || isBusy}
             />
           </label>
-          <button type="button" onClick={createRegistrationSession} disabled={!isEnabled || isBusy}>
+          <button type="button" onClick={createRegistrationSession} disabled={!isEnabled || isBusy || campaignSeedInvalid}>
             Register capabilities
           </button>
           <label className="file-button">
             <span>Import prompt JSON</span>
-            <input type="file" accept="application/json,.json" disabled={!isEnabled || isBusy} onChange={(event) => importPrompt(event.target.files?.[0] ?? null)} />
+            <input
+              type="file"
+              accept="application/json,.json"
+              disabled={!isEnabled || isBusy}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0] ?? null;
+                void importPrompt(file);
+                event.currentTarget.value = "";
+              }}
+            />
           </label>
           {promptImportName ? <p className="subtle">{promptImportName}</p> : null}
         </section>
@@ -353,7 +403,9 @@ export default function App() {
         <section className="panel stack">
           <div className="panel-header">
             <h2>IUT Response</h2>
-            <span className="state-chip ready">{uploadedResponseName ? "loaded" : "waiting"}</span>
+            <span className={`state-chip ${iutResponseStatus}`} title={iutResponseErrorDetail}>
+              {iutResponseLabel}
+            </span>
           </div>
           <label
             className={`file-button ${canUploadResponse ? "" : "disabled"}`}
@@ -364,7 +416,11 @@ export default function App() {
               type="file"
               accept="application/json,.json"
               disabled={!canUploadResponse}
-              onChange={(event) => loadResponseFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0] ?? null;
+                void loadResponseFile(file);
+                event.currentTarget.value = "";
+              }}
             />
           </label>
 
@@ -374,6 +430,9 @@ export default function App() {
             <p className="subtle">Select a Vector Set before uploading a response JSON.</p>
           ) : null}
           {uploadedResponseName ? <p className="subtle">{uploadedResponseName}</p> : null}
+          {iutResponseStatus === "error" && iutResponseErrorDetail ? (
+            <p className="response-error-detail">{iutResponseErrorDetail}</p>
+          ) : null}
           <button type="button" onClick={submitResponse} disabled={!activeVectorSetId || uploadedResponse == null || isBusy}>
             Validate response
           </button>
@@ -513,6 +572,55 @@ function ReportPane({ report }: { report: Report | null }) {
     return <p className="empty-state">No report.</p>;
   }
   return <pre className="markdown-preview">{report.markdown}</pre>;
+}
+
+function responseStatusLabel(status: IutResponseStatus): string {
+  if (status === "ready") {
+    return "ready";
+  }
+  if (status === "error") {
+    return "error: Wrong response format!";
+  }
+  return status;
+}
+
+function validationPassed(result: AcvpVectorSetResult): boolean {
+  const summary = result.validationResult.summary;
+  return (
+    summary.total > 0 &&
+    summary.passed === summary.total &&
+    summary.failed === 0 &&
+    summary.missing === 0 &&
+    summary.malformed === 0 &&
+    (summary.extra ?? 0) === 0
+  );
+}
+
+function validateCampaignSeed(value: string): { valid: boolean; message: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {
+      valid: true,
+      message: `Leave empty to use the deterministic fallback seed, or enter 16-64 bytes of even-length hex. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+    };
+  }
+  if (!/^[0-9a-fA-F]+$/.test(trimmed) || trimmed.length % 2 !== 0) {
+    return {
+      valid: false,
+      message: `Campaign seed must be an even-length hex string. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+    };
+  }
+  const byteLength = trimmed.length / 2;
+  if (byteLength < 16 || byteLength > 64) {
+    return {
+      valid: false,
+      message: `Campaign seed must be between 16 and 64 bytes. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+    };
+  }
+  return {
+    valid: true,
+    message: `Valid seed. Use 16-64 bytes of even-length hex. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+  };
 }
 
 function buildRegistrationAlgorithms(config: FipsVersionConfig, modes: CapabilityMode[], parameterSets: string[]): JsonObject[] {

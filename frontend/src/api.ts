@@ -27,7 +27,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: response.statusText }));
-    const detail = payload.detail ?? payload.error ?? response.statusText;
+    const detail = payload.detail ?? payload.error?.message ?? payload.error ?? response.statusText;
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return response.json() as Promise<T>;

@@ -37,7 +37,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--response-dir",
         default=str(SCRIPT_DIR / "response"),
-        help="Directory for response_pass.json and response_fail.json.",
+        help="Directory for response_pass_<mode>.json and response_fail_<mode>.json.",
     )
     parser.add_argument(
         "--variant",
@@ -71,13 +71,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         response_dir.mkdir(parents=True, exist_ok=True)
         pass_response = _generate_pass_response(prompt_path, prompt, response_dir, Path(args.mldsa_native_dir))
 
+        pass_output = response_dir / f"response_pass_{mode}.json"
+        fail_output = response_dir / f"response_fail_{mode}.json"
+
         written: list[Path] = []
         if args.variant in {"pass", "both"}:
-            written.append(_write_json(response_dir / "response_pass.json", pass_response))
+            written.append(_write_json(pass_output, pass_response))
         if args.variant in {"fail", "both"}:
             fail_response = copy.deepcopy(pass_response)
             _mutate_first_result(fail_response, mode)
-            written.append(_write_json(response_dir / "response_fail.json", fail_response))
+            written.append(_write_json(fail_output, fail_response))
 
         for path in written:
             print(path)

@@ -1,22 +1,33 @@
-# FIPS 204 / ML-DSA ACVP Web Viewer + Local JSON Validator
+# FIPS 204 / ML-DSA ACVP Local Client + Validator
 
-This is a FIPS 204 / ML-DSA ACVP JSON viewer and local validation demo.
+This is a local ACVP client workflow and validator for FIPS 204 / ML-DSA.
 
 This is not a full ACVP server.
 
-Full ACVP server workflow is intentionally out of scope for this MVP.
+Production ACVP server behavior is intentionally out of scope for this MVP.
 
 ## Project Purpose
 
-This project loads ACVP-style `prompt.json`, `expectedResults.json`, and `response.json` files for ML-DSA FIPS 204 vector sets, displays the vector set in a web UI, and performs local JSON comparison between expected results and a response file.
+This project supports a local ACVP-style flow:
 
-The validator does not run ML-DSA cryptographic operations. It only compares response fields against `expectedResults.json`.
+- capability registration
+- test session and vector set creation
+- prompt JSON download/import
+- IUT response JSON upload
+- local validation and report export
+
+The backend can generate local ML-DSA vector sets and expected results using the
+native oracle. The validator compares uploaded IUT response fields against those
+expected results.
 
 ## Current Scope
 
 - ML-DSA / keyGen / FIPS204
 - ML-DSA / sigGen / FIPS204
 - ML-DSA / sigVer / FIPS204
+- Registry-driven frontend selection for FIPS versions
+- FIPS203 is visible in the UI as `開發中` and operations are disabled
+- Local `/acvp/v1/testSessions` and `/acvp/v1/vectorSets` lifecycle
 - ACVP top-level object format
 - ACVP top-level array format with an `acvVersion` object followed by a vector-set object
 - Local comparison by `tgId` and `tcId`
@@ -25,17 +36,16 @@ The validator does not run ML-DSA cryptographic operations. It only compares res
 - `sigVer`: compare `testPassed`
 - Result states: `passed`, `failed`, `missing`, `malformed`
 - JSON and Markdown report export
+- IUT response state labels: `waiting`, `loaded`, `ready`, and `error`
+- Client-side `campaignSeed` validation matching the backend 16-64 byte hex rule
 
 ## Out Of Scope
 
 - Login or JWT
-- Formal `/testSessions`
-- Full vectorSet lifecycle
 - Vendor, module, or OE management
-- Database-backed workflow
 - NIST Demo ACVTS connection
 - Production ACVP protocol compliance
-- Cryptographic recomputation of key generation, signing, or verification
+- FIPS203 / ML-KEM operations
 
 ## Project Structure
 
@@ -54,6 +64,7 @@ ACVP-FIPS204/
     src/
       App.tsx
       api.ts
+      registry.ts
       types.ts
       components/
         Dashboard.tsx
@@ -69,6 +80,17 @@ ACVP-FIPS204/
     ML-DSA-keyGen-FIPS204/
     ML-DSA-sigGen-FIPS204/
     ML-DSA-sigVer-FIPS204/
+  IUT-tests/
+    mldsa-native/
+      run_test.py
+      run_keygen.py
+      run_keygen_fail.py
+      run_siggen.py
+      run_siggen_fail.py
+      run_sigver.py
+      run_sigver_fail.py
+      prompt/
+      response/
 ```
 
 ## Install Backend
@@ -144,35 +166,69 @@ Each sample directory includes:
 
 `response.pass.json` matches `expectedResults.json`. `response.fail.json` intentionally changes the first relevant field in the first test case.
 
-## Load Sample Data
+## ACVP Client Workflow
 
 1. Start the backend.
 2. Start the frontend.
-3. Use the Dashboard sample list.
-4. Select `Pass` or `Fail` for one of the ML-DSA FIPS204 samples.
+3. Select `FIPS 204 / ML-DSA` in the Registry panel.
+4. Select one or more modes and parameter sets.
+5. Enter a valid campaign seed or leave it empty for the deterministic fallback.
+6. Click `Register capabilities`.
+7. Download the prompt JSON from the active vector set.
+8. Generate an IUT response with `IUT-tests/mldsa-native/run_test.py`.
+9. Upload the response JSON in the IUT Response panel.
+10. Click `Validate response`, then export JSON or Markdown from Validation Report.
 
 The frontend calls:
 
 ```text
-GET /api/sample-data
-POST /api/load-sample
+GET  /acvp/v1/testSessions
+POST /acvp/v1/testSessions
+GET  /acvp/v1/testSessions/{sessionId}/vectorSets
+GET  /acvp/v1/vectorSets/{vectorSetId}
+POST /acvp/v1/vectorSets/{vectorSetId}/results
 ```
 
-## Upload JSON
+## IUT Response States
 
-Use the JSON Upload panel to select:
+The IUT Response chip reports the local upload/validation state:
 
-- `prompt.json`
-- `expectedResults.json`
-- `response.json`
+- `waiting`: no response JSON is loaded
+- `loaded`: a response JSON file has been selected
+- `ready`: validation completed and all cases passed
+- `error: Wrong response format!`: the uploaded response failed schema/mode validation
 
-After import, the UI displays vector-set metadata, test groups, test cases, and loaded JSON details.
+The response file input is reset after each selection, so the same
+`response_pass_<mode>.json` file can be uploaded repeatedly across newly created
+test sessions.
 
-The frontend calls:
+## Campaign Seed Validation
+
+For registration-generated vector sets, `campaignSeed` must be an even-length
+hex string between 16 and 64 bytes. Empty input is allowed and uses the backend
+deterministic fallback seed.
+
+Valid example:
 
 ```text
-POST /api/import
+00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF
 ```
+
+## IUT Scripts
+
+The IUT helpers live in `IUT-tests/mldsa-native/` and use the sibling
+`../mldsa-native` checkout as the implementation under test.
+
+```bash
+cd ACVP-FIPS204/IUT-tests/mldsa-native
+python3 run_test.py --prompt prompt/prompt-keygen.json
+python3 run_keygen.py --prompt prompt/prompt-keygen.json
+python3 run_keygen_fail.py --prompt prompt/prompt-keygen.json
+```
+
+Generated files are written to `response/response_pass_<mode>.json` and
+`response/response_fail_<mode>.json`. Prompt and response JSON files in the IUT
+test folders are ignored by git.
 
 ## Run Validation
 
@@ -215,6 +271,16 @@ GET  /api/import/{importId}
 GET  /api/report/{importId}
 GET  /api/sample-data
 POST /api/load-sample
+GET  /acvp/v1/version
+GET  /acvp/v1/algorithms
+GET  /acvp/v1/testSessions
+POST /acvp/v1/testSessions
+GET  /acvp/v1/testSessions/{sessionId}
+GET  /acvp/v1/testSessions/{sessionId}/vectorSets
+GET  /acvp/v1/testSessions/{sessionId}/results
+GET  /acvp/v1/vectorSets/{vectorSetId}
+GET  /acvp/v1/vectorSets/{vectorSetId}/expectedResults
+POST /acvp/v1/vectorSets/{vectorSetId}/results
 ```
 
 ## Roadmap
