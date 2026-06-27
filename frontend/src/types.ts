@@ -82,6 +82,7 @@ export interface ValidationSummaryCounts {
   failed: number;
   missing: number;
   malformed: number;
+  extra?: number;
 }
 
 export interface ValidationResult {
@@ -122,3 +123,119 @@ export interface Report {
   markdown: string;
 }
 
+export type FipsVersionId = "FIPS203" | "FIPS204";
+export type CapabilityMode = "keyGen" | "sigGen" | "sigVer";
+
+export interface CapabilityModeConfig {
+  id: CapabilityMode;
+  label: string;
+  enabled: boolean;
+}
+
+export interface FipsVersionConfig {
+  id: FipsVersionId;
+  label: string;
+  algorithm: string;
+  revision: string;
+  enabled: boolean;
+  status: "available" | "in-development";
+  modes: CapabilityModeConfig[];
+  parameterSets: string[];
+  defaultParameterSets: string[];
+  defaultHashAlgs?: string[];
+}
+
+export interface AcvpSessionSummary {
+  testSessionId: string;
+  status: string;
+  label?: string | null;
+  vectorSetIds: string[];
+  vectorSetUrls: string[];
+  vectorSetCount: number;
+  mode?: string | null;
+  algorithm?: string | null;
+  revision?: string | null;
+  testGroupCount?: number;
+  testCaseCount?: number;
+  productionReady: boolean;
+  profile: string;
+  demoOnly: boolean;
+  notProductionAcvp: boolean;
+  [key: string]: unknown;
+}
+
+export interface AcvpSessionDetail extends AcvpSessionSummary {
+  vectorSets?: AcvpVectorSetSummary[];
+  stateHistory?: JsonValue[];
+  negotiatedCapabilities?: JsonValue;
+  vectorGeneration?: JsonValue;
+}
+
+export interface AcvpVectorSetSummary {
+  vectorSetId: string;
+  testSessionId: string;
+  status: string;
+  url: string;
+  mode?: string | null;
+  vsId?: number | string | null;
+  algorithm?: string | null;
+  revision?: string | null;
+  testGroupCount?: number;
+  testCaseCount?: number;
+  downloadedAt?: string | null;
+  submittedAt?: string | null;
+  validatedAt?: string | null;
+  productionReady: boolean;
+  profile: string;
+  demoOnly: boolean;
+  notProductionAcvp: boolean;
+  [key: string]: unknown;
+}
+
+export interface AcvpVectorSetDownload {
+  vectorSetId: string;
+  testSessionId: string;
+  status: string;
+  prompt: AcvpVectorSet;
+  stateHistory?: JsonValue[];
+  productionReady: boolean;
+  profile: string;
+  demoOnly: boolean;
+  notProductionAcvp: boolean;
+  [key: string]: unknown;
+}
+
+export interface AcvpExpectedResults {
+  vectorSetId: string;
+  testSessionId: string;
+  expectedResults: AcvpVectorSet;
+  status: string;
+  productionReady: boolean;
+  profile: string;
+  demoOnly: boolean;
+  notProductionAcvp: boolean;
+}
+
+export interface AcvpVectorSetResult {
+  vectorSetId: string;
+  testSessionId: string;
+  status: string;
+  validationResult: ValidationResult;
+  report: Report;
+  stateHistory?: JsonValue[];
+  productionReady: boolean;
+  profile: string;
+  demoOnly: boolean;
+  notProductionAcvp: boolean;
+}
+
+export interface AcvpSessionResults {
+  testSessionId: string;
+  status: string;
+  summary: JsonObject;
+  vectorSetResults: AcvpVectorSetResult[];
+  productionReady: boolean;
+  profile: string;
+  demoOnly: boolean;
+  notProductionAcvp: boolean;
+}
