@@ -167,7 +167,7 @@ def test_unknown_session_and_vector_set_return_skeleton_404() -> None:
     assert_skeleton_metadata(body_of(missing_vector_set))
 
 
-def test_formal_registration_payload_returns_explicit_phase_3_3_unsupported() -> None:
+def test_registration_payload_missing_required_fields_returns_skeleton_400() -> None:
     response = create_acvp_v1_test_session(
         {
             "algorithms": [
@@ -180,10 +180,10 @@ def test_formal_registration_payload_returns_explicit_phase_3_3_unsupported() ->
         }
     )
 
-    assert_json_response(response, 501)
+    assert_json_response(response, 400)
     body = body_of(response)
-    assert body["error"]["code"] == "FORMAL_CAPABILITIES_NEGOTIATION_NOT_IMPLEMENTED"
-    assert "Phase 3-3" in body["error"]["message"]
+    assert body["error"]["code"] == "missing_required_field"
+    assert body["error"]["path"] == "$.algorithms[0].parameterSets"
     assert_skeleton_metadata(body)
 
 

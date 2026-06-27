@@ -64,8 +64,10 @@ class DemoAcvpResponseSubmitRequest(BaseModel):
 
 class AcvpV1TestSessionCreateRequest(BaseModel):
     prompt: Optional[JsonObject] = None
+    algorithms: Optional[List[JsonObject]] = None
     label: Optional[str] = None
     autoGenerateExpectedResults: bool = True
+    metadata: Optional[JsonObject] = None
 
 
 class AcvpV1VectorSetResultsSubmitRequest(BaseModel):

@@ -23,7 +23,6 @@ from .service import (
     get_vector_set_results,
     list_test_sessions,
     submit_vector_set_results,
-    unsupported_formal_registration,
     version,
 )
 
@@ -102,8 +101,6 @@ def get_acvp_v1_vector_set_expected_results(vectorSetId: str) -> Any:
 
 def _parse_session_create_request(payload: Any) -> Any:
     if isinstance(payload, AcvpV1TestSessionCreateRequest):
-        if payload.prompt is None:
-            return unsupported_formal_registration()
         return payload
     if not isinstance(payload, dict):
         return acvp_skeleton_error(
@@ -112,8 +109,22 @@ def _parse_session_create_request(payload: Any) -> Any:
             "Request body must be a JSON object.",
             "$",
         )
-    if "prompt" not in payload:
-        return unsupported_formal_registration()
+    has_prompt = "prompt" in payload and payload.get("prompt") is not None
+    has_algorithms = "algorithms" in payload and payload.get("algorithms") is not None
+    if has_prompt and has_algorithms:
+        return acvp_skeleton_error(
+            400,
+            "INVALID_REQUEST",
+            "prompt and algorithms cannot both be present in one test session request.",
+            "$",
+        )
+    if not has_prompt and not has_algorithms:
+        return acvp_skeleton_error(
+            400,
+            "INVALID_REQUEST",
+            "Request must include either prompt or algorithms.",
+            "$",
+        )
     try:
         return AcvpV1TestSessionCreateRequest.model_validate(payload)
     except ValidationError as exc:

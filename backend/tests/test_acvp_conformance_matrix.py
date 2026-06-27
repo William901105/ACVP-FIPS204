@@ -35,7 +35,8 @@ def test_acvp_conformance_matrix_declares_demo_and_skeleton_not_production() -> 
 
     assert "`/api/demo/acvp/...` routes are a local demo lifecycle" in text
     assert "not formal ACVP endpoints" in text
-    assert "`/acvp/v1/...` routes are Phase 3-2 skeleton endpoints" in text
+    assert "`/acvp/v1/...` routes are skeleton endpoints" in text
+    assert "Phase 3-3 registration negotiation is local-fips204-skeleton behavior" in text
     assert "not a production-ready server" in text
 
 
