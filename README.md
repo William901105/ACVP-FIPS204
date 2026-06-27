@@ -37,7 +37,7 @@ expected results.
 - Result states: `passed`, `failed`, `missing`, `malformed`
 - JSON and Markdown report export
 - IUT response state labels: `waiting`, `loaded`, `ready`, and `error`
-- Client-side `campaignSeed` validation matching the backend 16-64 byte hex rule
+- Client-side `campaignSeed` validation matching the backend 32-128 hex character rule
 
 ## Out Of Scope
 
@@ -194,8 +194,8 @@ POST /acvp/v1/vectorSets/{vectorSetId}/results
 The IUT Response chip reports the local upload/validation state:
 
 - `waiting`: no response JSON is loaded
-- `loaded`: a response JSON file has been selected
-- `ready`: validation completed and all cases passed
+- `ready`: a response JSON file has been selected and is ready to submit
+- `loaded`: the response has been sent to the local ACVP endpoint and is in transit
 - `error: Wrong response format!`: the uploaded response failed schema/mode validation
 
 The response file input is reset after each selection, so the same
@@ -204,15 +204,10 @@ test sessions.
 
 ## Campaign Seed Validation
 
-For registration-generated vector sets, `campaignSeed` must be an even-length
-hex string between 16 and 64 bytes. Empty input is allowed and uses the backend
-deterministic fallback seed.
-
-Valid example:
-
-```text
-00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF
-```
+For registration-generated vector sets, `campaignSeed` must contain only
+hexadecimal characters, must not contain whitespace, must have even length, and
+must be between 32 and 128 hex characters. Empty input is allowed and uses the
+backend deterministic fallback seed.
 
 ## IUT Scripts
 

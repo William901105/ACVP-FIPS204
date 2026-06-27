@@ -29,7 +29,6 @@ import type {
 
 const DEFAULT_TESTS_PER_GROUP = 1;
 const DEFAULT_CAMPAIGN_SEED = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
-const CAMPAIGN_SEED_EXAMPLE = DEFAULT_CAMPAIGN_SEED;
 
 type IutResponseStatus = "waiting" | "loaded" | "ready" | "error";
 
@@ -64,6 +63,7 @@ export default function App() {
   const campaignSeedValidation = useMemo(() => validateCampaignSeed(campaignSeed), [campaignSeed]);
   const campaignSeedInvalid = isEnabled && !campaignSeedValidation.valid;
   const iutResponseLabel = responseStatusLabel(iutResponseStatus);
+  const canValidateResponse = Boolean(activeVectorSetId && uploadedResponse != null && iutResponseStatus === "ready") && !isBusy;
 
   useEffect(() => {
     setSelectedModes(config.modes.filter((mode) => mode.enabled).slice(0, 1).map((mode) => mode.id));
@@ -180,7 +180,7 @@ export default function App() {
     try {
       setUploadedResponse(await readJsonFile(file));
       setUploadedResponseName(file.name);
-      setIutResponseStatus("loaded");
+      setIutResponseStatus("ready");
       setIutResponseErrorDetail("");
       setVectorResult(null);
       setSessionResults(null);
@@ -199,9 +199,11 @@ export default function App() {
       return;
     }
     await runBusy(async () => {
+      setIutResponseStatus("loaded");
+      setIutResponseErrorDetail("");
       const result = await submitAcvpVectorSetResults(activeVectorSetId, uploadedResponse);
       setVectorResult(result);
-      setIutResponseStatus(validationPassed(result) ? "ready" : "loaded");
+      setIutResponseStatus("ready");
       setIutResponseErrorDetail("");
       if (activeSession) {
         setActiveSession(await getAcvpSession(activeSession.testSessionId));
@@ -433,7 +435,7 @@ export default function App() {
           {iutResponseStatus === "error" && iutResponseErrorDetail ? (
             <p className="response-error-detail">{iutResponseErrorDetail}</p>
           ) : null}
-          <button type="button" onClick={submitResponse} disabled={!activeVectorSetId || uploadedResponse == null || isBusy}>
+          <button type="button" onClick={submitResponse} disabled={!canValidateResponse}>
             Validate response
           </button>
           <JsonPane title="Response" value={uploadedResponse} />
@@ -584,42 +586,40 @@ function responseStatusLabel(status: IutResponseStatus): string {
   return status;
 }
 
-function validationPassed(result: AcvpVectorSetResult): boolean {
-  const summary = result.validationResult.summary;
-  return (
-    summary.total > 0 &&
-    summary.passed === summary.total &&
-    summary.failed === 0 &&
-    summary.missing === 0 &&
-    summary.malformed === 0 &&
-    (summary.extra ?? 0) === 0
-  );
-}
-
 function validateCampaignSeed(value: string): { valid: boolean; message: string } {
-  const trimmed = value.trim();
-  if (!trimmed) {
+  if (!value) {
     return {
       valid: true,
-      message: `Leave empty to use the deterministic fallback seed, or enter 16-64 bytes of even-length hex. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+      message: "Leave empty to use the deterministic fallback seed, or enter 32-128 hex characters."
     };
   }
-  if (!/^[0-9a-fA-F]+$/.test(trimmed) || trimmed.length % 2 !== 0) {
+  if (/\s/.test(value)) {
     return {
       valid: false,
-      message: `Campaign seed must be an even-length hex string. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+      message: "Campaign seed must not contain whitespace."
     };
   }
-  const byteLength = trimmed.length / 2;
-  if (byteLength < 16 || byteLength > 64) {
+  if (!/^[0-9a-fA-F]+$/.test(value)) {
     return {
       valid: false,
-      message: `Campaign seed must be between 16 and 64 bytes. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+      message: "Campaign seed must contain only hexadecimal characters."
+    };
+  }
+  if (value.length % 2 !== 0) {
+    return {
+      valid: false,
+      message: "Campaign seed must be an even-length hex string."
+    };
+  }
+  if (value.length < 32 || value.length > 128) {
+    return {
+      valid: false,
+      message: "Campaign seed must be between 32 and 128 hex characters."
     };
   }
   return {
     valid: true,
-    message: `Valid seed. Use 16-64 bytes of even-length hex. Example: ${CAMPAIGN_SEED_EXAMPLE}`
+    message: "Valid seed. Use 32-128 hex characters."
   };
 }
 
