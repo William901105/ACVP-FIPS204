@@ -62,6 +62,16 @@ class DemoAcvpResponseSubmitRequest(BaseModel):
     validateImmediately: bool = True
 
 
+class AcvpV1TestSessionCreateRequest(BaseModel):
+    prompt: Optional[JsonObject] = None
+    label: Optional[str] = None
+    autoGenerateExpectedResults: bool = True
+
+
+class AcvpV1VectorSetResultsSubmitRequest(BaseModel):
+    response: JsonObject
+
+
 class MldsaKeygenRequest(BaseModel):
     parameterSet: str
     seed: str

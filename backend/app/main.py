@@ -19,6 +19,7 @@ from .acvp_mldsa.validators import (
     validate_mldsa_response,
     validate_mldsa_vector_set,
 )
+from .acvp_protocol.routes import router as acvp_v1_router
 from .acvp_parser import AcvpParseError, normalize_acvp_json, summarize_vector_set
 from .crypto_oracle.mldsa_oracle import (
     MldsaOracleError,
@@ -70,6 +71,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(acvp_v1_router)
 
 IMPORT_STORE: Dict[str, Dict[str, Any]] = {}
 DEMO_SESSION_STORE: Dict[str, Dict[str, Any]] = {}
