@@ -7,11 +7,15 @@ from uuid import uuid4
 
 from fastapi.responses import JSONResponse
 
+from ..acvp_core.algorithm_provider import (
+    AcvpAlgorithmProvider,
+    AcvpProviderExecutionError,
+    AcvpProviderInputError,
+)
+from ..acvp_core.registry import ProviderNotFoundError, get_provider, list_algorithms
 from ..acvp_mldsa.errors import AcvpSchemaError
-from ..acvp_mldsa.expected import generate_expected_results_from_prompt
-from ..acvp_mldsa.validators import validate_mldsa_response, validate_mldsa_vector_set
-from ..acvp_parser import normalize_acvp_json, summarize_vector_set
-from ..crypto_oracle.mldsa_errors import MldsaOracleError, MldsaOracleInputError
+from ..acvp_mldsa.provider import ensure_mldsa_provider_registered
+from ..acvp_parser import AcvpParseError, normalize_acvp_json, summarize_vector_set
 from ..models import AcvpV1TestSessionCreateRequest, AcvpV1VectorSetGenerateRequest
 from ..report import build_report
 from ..storage.sqlite_store import (
@@ -25,26 +29,9 @@ from ..storage.sqlite_store import (
     save_acvp_session,
     save_acvp_vector_set,
 )
-from ..validator import validate
-from .capabilities import (
-    negotiate_mldsa_capabilities,
-    validate_registration_container,
-)
 from .disposition import build_acvp_vector_set_results
 from .errors import acvp_error_response
 from .paging import apply_paging, build_paged_body
-from .vector_generation import (
-    DEFAULT_TESTS_PER_GROUP,
-    GENERATION_PROFILES,
-    LOCAL_DEBUG_PROFILE,
-    MAX_TESTS_PER_GROUP,
-    NIST_CONFORMANCE_PROFILE,
-    NIST_KEYGEN_TESTS_PER_GROUP,
-    NIST_SIGGEN_TESTS_PER_GROUP,
-    NIST_SIGVER_TESTS_PER_GROUP,
-    fallback_campaign_seed,
-    generate_vector_sets_from_negotiated_capabilities,
-)
 from .state_machine import (
     StateTransitionError,
     TestSessionStatus,
@@ -58,6 +45,7 @@ from .state_machine import (
     vector_set_is_expired,
 )
 
+ensure_mldsa_provider_registered()
 
 SKELETON_PROFILE = "local-fips204-skeleton"
 SKELETON_METADATA: Dict[str, Any] = {
@@ -107,7 +95,7 @@ def version() -> Dict[str, Any]:
             "acvVersion": "1.0",
             "apiVersion": "v1",
             "serverName": "FIPS204 ACVP Local Skeleton",
-            "implementationPhase": "4-3-commit3",
+            "implementationPhase": "5-3-provider-interface",
             "nistReferences": NIST_REFERENCES,
         }
     )
@@ -146,6 +134,7 @@ def algorithms() -> Dict[str, Any]:
                         ],
                     },
                     "localOracleLimitations": [
+                        "Phase 5-3 routes /acvp/v1 registration, negotiation, vector generation, expectedResults, and response validation through the algorithm provider registry. Only ML-DSA/FIPS204 is registered.",
                         "Phase 5-2 supports SHAKE-128 and SHAKE-256 preHash generation with fixed digest lengths aligned to the native oracle mapping.",
                         "Phase 4-1 supports SQLite-backed local-fips204-skeleton persistence; production vector generation is not implemented.",
                         "Phase 4-3 Commit 1 adds ACVP array envelopes and canonical nested vectorSet routes while remaining a local skeleton.",
@@ -159,6 +148,312 @@ def algorithms() -> Dict[str, Any]:
             ]
         }
     )
+
+
+def _validate_registration_container_with_providers(payload: Any) -> Dict[str, Any]:
+    obj = _require_json_object(payload, "$")
+    algorithms_value = _require_json_field(obj, "algorithms", "$")
+    algorithms = _require_json_array(algorithms_value, "$.algorithms", non_empty=True)
+
+    normalized_algorithms: List[Dict[str, Any]] = []
+    seen = set()
+
+    for index, item in enumerate(algorithms):
+        item_path = _child_path("$.algorithms", index)
+        registration = _require_json_object(item, item_path)
+        algorithm = _require_json_string(
+            _require_json_field(registration, "algorithm", item_path),
+            _child_path(item_path, "algorithm"),
+        )
+        mode = _require_json_string(
+            _require_json_field(registration, "mode", item_path),
+            _child_path(item_path, "mode"),
+        )
+        revision = _require_json_string(
+            _require_json_field(registration, "revision", item_path),
+            _child_path(item_path, "revision"),
+        )
+        provider = _provider_for_identity(algorithm, mode, revision, item_path)
+        try:
+            normalized = provider.validate_registration(registration)
+        except AcvpSchemaError as exc:
+            raise _with_prefixed_path(exc, item_path) from exc
+
+        normalized_algorithm = str(normalized.get("algorithm"))
+        normalized_mode = str(normalized.get("mode"))
+        normalized_revision = str(normalized.get("revision"))
+        if not provider.supports(normalized_algorithm, normalized_mode, normalized_revision):
+            raise _provider_not_found_schema_error(
+                ProviderNotFoundError(
+                    normalized_algorithm,
+                    normalized_mode,
+                    normalized_revision,
+                ),
+                item_path,
+            )
+
+        key = (normalized_algorithm, normalized_mode, normalized_revision)
+        if key in seen:
+            raise AcvpSchemaError(
+                "duplicate_registration",
+                "Duplicate algorithm/mode/revision registration.",
+                _child_path(item_path, "mode"),
+            )
+        seen.add(key)
+        normalized_algorithms.append(normalized)
+
+    container: Dict[str, Any] = {"algorithms": normalized_algorithms}
+    if "label" in obj:
+        container["label"] = _require_json_string(obj["label"], "$.label")
+    if "metadata" in obj:
+        metadata = obj["metadata"]
+        if not isinstance(metadata, (dict, list)):
+            raise AcvpSchemaError(
+                "invalid_type",
+                "metadata must be a JSON object or array when provided",
+                "$.metadata",
+            )
+        container["metadata"] = metadata
+    return container
+
+
+def _negotiate_capabilities_with_providers(container: Dict[str, Any]) -> Dict[str, Any]:
+    negotiated: List[Dict[str, Any]] = []
+    unsupported: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+    identities: List[tuple[str, str]] = []
+
+    for index, registration in enumerate(container["algorithms"]):
+        item_path = _child_path("$.algorithms", index)
+        algorithm = str(registration["algorithm"])
+        mode = str(registration["mode"])
+        revision = str(registration["revision"])
+        provider = _provider_for_identity(algorithm, mode, revision, item_path)
+        if (algorithm, revision) not in identities:
+            identities.append((algorithm, revision))
+        try:
+            result = provider.negotiate_capabilities(registration)
+        except AcvpSchemaError as exc:
+            raise _with_prefixed_path(exc, item_path) from exc
+
+        for entry in result.get("negotiated", []):
+            negotiated_entry = dict(entry)
+            negotiated_entry.setdefault("algorithm", algorithm)
+            negotiated_entry.setdefault("revision", revision)
+            negotiated.append(negotiated_entry)
+        unsupported.extend(result.get("unsupported", []))
+        warnings.extend(result.get("warnings", []))
+
+    if not negotiated:
+        raise AcvpSchemaError(
+            "UNSUPPORTED_CAPABILITIES",
+            "No supported capabilities were negotiated.",
+            "$.algorithms",
+        )
+
+    algorithm_values = [identity[0] for identity in identities]
+    revision_values = [identity[1] for identity in identities]
+    return {
+        "algorithm": algorithm_values[0] if len(algorithm_values) == 1 else algorithm_values,
+        "revision": revision_values[0] if len(revision_values) == 1 else revision_values,
+        "negotiated": negotiated,
+        "unsupported": unsupported,
+        "warnings": warnings,
+        "nextAction": VECTOR_GENERATION_AVAILABLE_ACTION,
+    }
+
+
+def _generate_vector_sets_with_providers(
+    negotiated_capabilities: Dict[str, Any],
+    *,
+    campaign_seed: str,
+    tests_per_group: int,
+    generation_profile: str,
+) -> List[Dict[str, Any]]:
+    buckets: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    order: List[tuple[str, str, str]] = []
+
+    for index, entry in enumerate(negotiated_capabilities.get("negotiated", [])):
+        entry_path = _child_path("$.negotiatedCapabilities.negotiated", index)
+        entry_obj = _require_json_object(entry, entry_path)
+        algorithm = entry_obj.get("algorithm", negotiated_capabilities.get("algorithm"))
+        revision = entry_obj.get("revision", negotiated_capabilities.get("revision"))
+        mode = entry_obj.get("mode")
+        algorithm_text = _require_json_string(algorithm, _child_path(entry_path, "algorithm"))
+        mode_text = _require_json_string(mode, _child_path(entry_path, "mode"))
+        revision_text = _require_json_string(revision, _child_path(entry_path, "revision"))
+        provider = _provider_for_identity(
+            algorithm_text,
+            mode_text,
+            revision_text,
+            entry_path,
+        )
+        key = (algorithm_text, revision_text, provider.__class__.__name__)
+        if key not in buckets:
+            buckets[key] = {
+                "provider": provider,
+                "algorithm": algorithm_text,
+                "revision": revision_text,
+                "entries": [],
+            }
+            order.append(key)
+        buckets[key]["entries"].append(entry_obj)
+
+    prompts: List[Dict[str, Any]] = []
+    for key in order:
+        bucket = buckets[key]
+        provider = bucket["provider"]
+        provider_capabilities = dict(negotiated_capabilities)
+        provider_capabilities["algorithm"] = bucket["algorithm"]
+        provider_capabilities["revision"] = bucket["revision"]
+        provider_capabilities["negotiated"] = bucket["entries"]
+        prompts.extend(
+            provider.generate_vector_sets(
+                provider_capabilities,
+                campaign_seed=campaign_seed,
+                tests_per_group=tests_per_group,
+                generation_profile=generation_profile,
+            )
+        )
+    return prompts
+
+
+def _provider_for_prompt(prompt: Any) -> AcvpAlgorithmProvider:
+    try:
+        vector_set = normalize_acvp_json(prompt)
+    except AcvpParseError as exc:
+        raise AcvpSchemaError("invalid_container", str(exc), "$") from exc
+    algorithm = _require_json_string(
+        _require_json_field(vector_set, "algorithm", "$"),
+        "$.algorithm",
+    )
+    mode = _require_json_string(
+        _require_json_field(vector_set, "mode", "$"),
+        "$.mode",
+    )
+    revision = _require_json_string(
+        _require_json_field(vector_set, "revision", "$"),
+        "$.revision",
+    )
+    return _provider_for_identity(algorithm, mode, revision, "$")
+
+
+def _provider_for_registration_container(
+    registration_container: Dict[str, Any],
+) -> AcvpAlgorithmProvider:
+    algorithms = registration_container.get("algorithms")
+    if not isinstance(algorithms, list) or not algorithms:
+        raise AcvpSchemaError(
+            "missing_required_field",
+            "Registration container must include at least one algorithm.",
+            "$.algorithms",
+        )
+    first_registration = _require_json_object(algorithms[0], "$.algorithms[0]")
+    algorithm = _require_json_string(
+        _require_json_field(first_registration, "algorithm", "$.algorithms[0]"),
+        "$.algorithms[0].algorithm",
+    )
+    mode = _require_json_string(
+        _require_json_field(first_registration, "mode", "$.algorithms[0]"),
+        "$.algorithms[0].mode",
+    )
+    revision = _require_json_string(
+        _require_json_field(first_registration, "revision", "$.algorithms[0]"),
+        "$.algorithms[0].revision",
+    )
+    return _provider_for_identity(algorithm, mode, revision, "$.algorithms[0]")
+
+
+def _provider_for_identity(
+    algorithm: str,
+    mode: str,
+    revision: str,
+    path: str,
+) -> AcvpAlgorithmProvider:
+    try:
+        return get_provider(algorithm, mode, revision)
+    except ProviderNotFoundError as exc:
+        raise _provider_not_found_schema_error(exc, path) from exc
+
+
+def _provider_not_found_schema_error(
+    exc: ProviderNotFoundError,
+    path: str,
+) -> AcvpSchemaError:
+    summaries = list_algorithms()
+    algorithm_summary = next(
+        (
+            summary
+            for summary in summaries
+            if summary.get("algorithm") == exc.algorithm
+        ),
+        None,
+    )
+    if algorithm_summary is None:
+        return AcvpSchemaError(
+            "unsupported_algorithm",
+            f"Unsupported algorithm provider: {exc.algorithm}",
+            _child_path(path, "algorithm"),
+        )
+
+    revisions = set(algorithm_summary.get("revisions", []))
+    if exc.revision not in revisions:
+        return AcvpSchemaError(
+            "unsupported_revision",
+            f"Unsupported revision for {exc.algorithm}: {exc.revision}",
+            _child_path(path, "revision"),
+        )
+    return AcvpSchemaError(
+        "invalid_mode",
+        f"Unsupported mode for {exc.algorithm}/{exc.revision}: {exc.mode}",
+        _child_path(path, "mode"),
+    )
+
+
+def _require_json_object(value: Any, path: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise AcvpSchemaError("invalid_type", "Expected object", path)
+    return value
+
+
+def _require_json_array(value: Any, path: str, *, non_empty: bool = False) -> List[Any]:
+    if not isinstance(value, list):
+        raise AcvpSchemaError("invalid_type", "Expected array", path)
+    if non_empty and not value:
+        raise AcvpSchemaError("invalid_value", "Array must not be empty", path)
+    return value
+
+
+def _require_json_string(value: Any, path: str) -> str:
+    if not isinstance(value, str):
+        raise AcvpSchemaError("invalid_type", "Expected string", path)
+    return value
+
+
+def _require_json_field(obj: Dict[str, Any], field: str, path: str) -> Any:
+    if field not in obj:
+        raise AcvpSchemaError(
+            "missing_required_field",
+            f"Missing required field: {field}",
+            _child_path(path, field),
+        )
+    return obj[field]
+
+
+def _child_path(path: str, child: object) -> str:
+    if isinstance(child, int):
+        return f"{path}[{child}]"
+    return f"{path}.{child}" if path else f"$.{child}"
+
+
+def _with_prefixed_path(exc: AcvpSchemaError, prefix: str) -> AcvpSchemaError:
+    if not exc.path or exc.path == "$":
+        path = prefix
+    elif exc.path.startswith("$."):
+        path = f"{prefix}{exc.path[1:]}"
+    else:
+        path = exc.path
+    return AcvpSchemaError(exc.code, exc.message, path)
 
 
 def list_test_sessions(
@@ -212,16 +507,17 @@ def create_test_session(payload: AcvpV1TestSessionCreateRequest) -> Any:
         )
 
     try:
-        prompt_vs = validate_mldsa_vector_set(payload.prompt)
+        provider = _provider_for_prompt(payload.prompt)
+        prompt_vs = provider.validate_prompt(payload.prompt)
         expected_results = None
         if payload.autoGenerateExpectedResults:
-            expected_results = generate_expected_results_from_prompt(payload.prompt)
-            validate_mldsa_response(expected_results, expected_mode=prompt_vs["mode"])
+            expected_results = provider.generate_expected_results(payload.prompt)
+            provider.validate_response(expected_results, expected_mode=prompt_vs["mode"])
     except AcvpSchemaError as exc:
         return acvp_skeleton_error(400, exc.code, exc.message, exc.path)
-    except MldsaOracleInputError as exc:
+    except AcvpProviderInputError as exc:
         return acvp_skeleton_error(400, "ORACLE_INPUT_ERROR", str(exc), "$")
-    except MldsaOracleError as exc:
+    except AcvpProviderExecutionError as exc:
         return acvp_skeleton_error(500, "ORACLE_EXECUTION_ERROR", str(exc), "$")
 
     now = _timestamp()
@@ -295,13 +591,22 @@ def _create_registration_session(payload: AcvpV1TestSessionCreateRequest) -> Any
             container_payload["label"] = payload.label
         if payload.metadata is not None:
             container_payload["metadata"] = payload.metadata
-        registration_container = validate_registration_container(container_payload)
-        negotiated_capabilities = negotiate_mldsa_capabilities(registration_container)
-        generation_profile = _resolve_generation_profile(payload.generationProfile)
-        campaign_seed = _resolve_campaign_seed(payload.campaignSeed, registration_container)
+        registration_container = _validate_registration_container_with_providers(container_payload)
+        negotiated_capabilities = _negotiate_capabilities_with_providers(registration_container)
+        generation_provider = _provider_for_registration_container(registration_container)
+        generation_profile = _resolve_generation_profile(
+            payload.generationProfile,
+            generation_provider,
+        )
+        campaign_seed = _resolve_campaign_seed(
+            payload.campaignSeed,
+            registration_container,
+            generation_provider,
+        )
         tests_per_group = _resolve_tests_per_group(
             payload.testsPerGroup,
             generation_profile,
+            generation_provider,
         )
     except AcvpSchemaError as exc:
         return acvp_skeleton_error(400, exc.code, exc.message, exc.path)
@@ -332,7 +637,7 @@ def _create_registration_session(payload: AcvpV1TestSessionCreateRequest) -> Any
     transition_session(
         session,
         TestSessionStatus.CAPABILITIES_ACCEPTED.value,
-        reason="ML-DSA capabilities accepted by local skeleton negotiation.",
+        reason="Capabilities accepted by provider-based local skeleton negotiation.",
     )
     save_acvp_session(session)
 
@@ -388,18 +693,22 @@ def generate_vector_sets_for_session(
         )
 
     try:
+        generation_provider = _provider_for_registration_container(session["registration"])
         campaign_seed = _resolve_campaign_seed(
             payload.campaignSeed if payload.campaignSeed is not None else session.get("campaignSeed"),
             session["registration"],
+            generation_provider,
         )
         generation_profile = _resolve_generation_profile(
             payload.generationProfile
             if payload.generationProfile is not None
-            else session.get("generationProfile")
+            else session.get("generationProfile"),
+            generation_provider,
         )
         tests_per_group = _resolve_tests_per_group(
             payload.testsPerGroup if payload.testsPerGroup is not None else session.get("testsPerGroup"),
             generation_profile,
+            generation_provider,
         )
     except AcvpSchemaError as exc:
         return acvp_skeleton_error(400, exc.code, exc.message, exc.path)
@@ -452,7 +761,7 @@ def _generate_and_store_vector_sets(
     reason: str,
 ) -> Optional[JSONResponse]:
     try:
-        prompts = generate_vector_sets_from_negotiated_capabilities(
+        prompts = _generate_vector_sets_with_providers(
             session["negotiatedCapabilities"],
             campaign_seed=campaign_seed,
             tests_per_group=tests_per_group,
@@ -466,9 +775,9 @@ def _generate_and_store_vector_sets(
         )
     except AcvpSchemaError as exc:
         return acvp_skeleton_error(500, exc.code, exc.message, exc.path)
-    except MldsaOracleInputError as exc:
+    except AcvpProviderInputError as exc:
         return acvp_skeleton_error(400, "ORACLE_INPUT_ERROR", str(exc), "$")
-    except MldsaOracleError as exc:
+    except AcvpProviderExecutionError as exc:
         return acvp_skeleton_error(500, "ORACLE_EXECUTION_ERROR", str(exc), "$")
     except ValueError as exc:
         return acvp_skeleton_error(500, "VECTOR_GENERATION_ERROR", str(exc), "$")
@@ -527,7 +836,10 @@ def _generate_and_store_vector_sets(
     session["vectorGeneration"] = {
         "campaignSeed": campaign_seed,
         "testsPerGroup": tests_per_group,
-        "effectiveMinimums": _generation_profile_minimums(generation_profile),
+        "effectiveMinimums": _generation_profile_minimums(
+            generation_profile,
+            _provider_for_registration_container(session["registration"]),
+        ),
         "generatedVectorSetCount": len(vector_set_ids),
         "modes": [
             normalize_acvp_json(vector_set["prompt"])["mode"]
@@ -548,9 +860,10 @@ def _prepare_generated_vector_sets(
 ) -> List[Dict[str, Any]]:
     prepared: List[Dict[str, Any]] = []
     for prompt in prompts:
-        prompt_vs = validate_mldsa_vector_set(prompt)
-        expected_results = generate_expected_results_from_prompt(prompt)
-        validate_mldsa_response(expected_results, expected_mode=prompt_vs["mode"])
+        provider = _provider_for_prompt(prompt)
+        prompt_vs = provider.validate_prompt(prompt)
+        expected_results = provider.generate_expected_results(prompt)
+        provider.validate_response(expected_results, expected_mode=prompt_vs["mode"])
         vector_set_id = str(uuid4())
         prepared.append(
             {
@@ -576,9 +889,17 @@ def _prepare_generated_vector_sets(
 def _resolve_campaign_seed(
     provided_seed: Optional[str],
     registration_container: Dict[str, Any],
+    provider: AcvpAlgorithmProvider,
 ) -> str:
     if provided_seed is None:
-        return fallback_campaign_seed(registration_container)
+        fallback = getattr(provider, "fallback_campaign_seed", None)
+        if not callable(fallback):
+            raise AcvpSchemaError(
+                "invalid_value",
+                "Provider does not expose fallback campaign seed generation.",
+                "$.campaignSeed",
+            )
+        return str(fallback(registration_container))
     if not isinstance(provided_seed, str):
         raise AcvpSchemaError("invalid_type", "campaignSeed must be a hex string", "$.campaignSeed")
     if len(provided_seed) % 2 != 0 or _HEX_RE.fullmatch(provided_seed) is None:
@@ -593,28 +914,52 @@ def _resolve_campaign_seed(
     return provided_seed.upper()
 
 
-def _resolve_generation_profile(value: Optional[str]) -> str:
+def _resolve_generation_profile(
+    value: Optional[str],
+    provider: AcvpAlgorithmProvider,
+) -> str:
+    profiles = list(getattr(provider, "generation_profiles", []))
+    default_profile = getattr(provider, "default_generation_profile", None)
     if value is None:
-        return LOCAL_DEBUG_PROFILE
+        if isinstance(default_profile, str):
+            return default_profile
+        raise AcvpSchemaError(
+            "invalid_value",
+            "Provider does not expose a default generation profile.",
+            "$.generationProfile",
+        )
     if not isinstance(value, str):
         raise AcvpSchemaError(
             "invalid_type",
             "generationProfile must be a string",
             "$.generationProfile",
         )
-    if value not in GENERATION_PROFILES:
+    if value not in profiles:
         raise AcvpSchemaError(
             "invalid_value",
             "generationProfile must be one of: "
-            + ", ".join(sorted(GENERATION_PROFILES)),
+            + ", ".join(sorted(profiles)),
             "$.generationProfile",
         )
     return value
 
 
-def _resolve_tests_per_group(value: Optional[int], generation_profile: str) -> int:
+def _resolve_tests_per_group(
+    value: Optional[int],
+    generation_profile: str,
+    provider: AcvpAlgorithmProvider,
+) -> int:
+    default_tests_per_group = getattr(provider, "default_tests_per_group", None)
+    local_debug_profile = getattr(provider, "local_debug_profile", None)
+    max_tests_per_group = getattr(provider, "max_tests_per_group", None)
     if value is None:
-        return DEFAULT_TESTS_PER_GROUP
+        if isinstance(default_tests_per_group, int):
+            return default_tests_per_group
+        raise AcvpSchemaError(
+            "invalid_value",
+            "Provider does not expose a default testsPerGroup.",
+            "$.testsPerGroup",
+        )
     if not isinstance(value, int) or isinstance(value, bool):
         raise AcvpSchemaError("invalid_type", "testsPerGroup must be an integer", "$.testsPerGroup")
     if value < 1:
@@ -623,27 +968,27 @@ def _resolve_tests_per_group(value: Optional[int], generation_profile: str) -> i
             "testsPerGroup must be at least 1",
             "$.testsPerGroup",
         )
-    if generation_profile == LOCAL_DEBUG_PROFILE and value > MAX_TESTS_PER_GROUP:
+    if (
+        generation_profile == local_debug_profile
+        and isinstance(max_tests_per_group, int)
+        and value > max_tests_per_group
+    ):
         raise AcvpSchemaError(
             "invalid_value",
-            f"testsPerGroup must be between 1 and {MAX_TESTS_PER_GROUP}",
+            f"testsPerGroup must be between 1 and {max_tests_per_group}",
             "$.testsPerGroup",
         )
     return value
 
 
-def _generation_profile_minimums(generation_profile: str) -> Dict[str, int]:
-    if generation_profile == NIST_CONFORMANCE_PROFILE:
-        return {
-            "keyGen": NIST_KEYGEN_TESTS_PER_GROUP,
-            "sigGen": NIST_SIGGEN_TESTS_PER_GROUP,
-            "sigVer": NIST_SIGVER_TESTS_PER_GROUP,
-        }
-    return {
-        "keyGen": DEFAULT_TESTS_PER_GROUP,
-        "sigGen": DEFAULT_TESTS_PER_GROUP,
-        "sigVer": 2,
-    }
+def _generation_profile_minimums(
+    generation_profile: str,
+    provider: AcvpAlgorithmProvider,
+) -> Dict[str, int]:
+    minimums = getattr(provider, "generation_profile_minimums", None)
+    if callable(minimums):
+        return dict(minimums(generation_profile))
+    return {}
 
 
 def get_test_session(session_id: str) -> Any:
@@ -870,14 +1215,13 @@ def submit_vector_set_results(
     response = _response_with_prompt_metadata(response, vector_set)
     mode = normalize_acvp_json(vector_set["prompt"]).get("mode")
     try:
-        validate_mldsa_response(response, expected_mode=mode)
-        bundle = {
-            "prompt": vector_set["prompt"],
-            "expectedResults": vector_set["expectedResults"],
-            "response": response,
-            "label": _get_session_label(vector_set["testSessionId"]),
-        }
-        validation_result = validate(bundle)
+        provider = _provider_for_prompt(vector_set["prompt"])
+        provider.validate_response(response, expected_mode=mode)
+        validation_result = provider.validate_results(
+            prompt=vector_set["prompt"],
+            expected_results=vector_set["expectedResults"],
+            response=response,
+        )
         report = build_report(vector_set_id, validation_result)
     except AcvpSchemaError as exc:
         return acvp_skeleton_error(400, exc.code, exc.message, exc.path)
