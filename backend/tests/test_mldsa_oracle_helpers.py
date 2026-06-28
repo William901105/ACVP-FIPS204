@@ -81,7 +81,7 @@ def test_normalize_context_hex_enforces_acvp_limit() -> None:
         normalize_context_hex("00" * 256)
 
 
-def test_hash_message_for_prehash_supports_sha2_and_sha3() -> None:
+def test_hash_message_for_prehash_supports_sha2_sha3_and_shake() -> None:
     message = bytes.fromhex(MESSAGE_HEX)
 
     assert hash_message_for_prehash(MESSAGE_HEX, "SHA2-256") == (
@@ -93,11 +93,12 @@ def test_hash_message_for_prehash_supports_sha2_and_sha3() -> None:
     assert hash_message_for_prehash(MESSAGE_HEX, "SHA3-384") == (
         hashlib.sha3_384(message).hexdigest().upper()
     )
-
-
-def test_hash_message_for_prehash_rejects_shake_without_output_length() -> None:
-    with pytest.raises(MldsaOracleInputError):
-        hash_message_for_prehash(MESSAGE_HEX, "SHAKE-128")
+    assert hash_message_for_prehash(MESSAGE_HEX, "SHAKE-128") == (
+        hashlib.shake_128(message).digest(32).hex().upper()
+    )
+    assert hash_message_for_prehash(MESSAGE_HEX, "SHAKE-256") == (
+        hashlib.shake_256(message).digest(64).hex().upper()
+    )
 
 
 def test_validate_parameter_set_rejects_unsupported_value() -> None:
@@ -338,15 +339,6 @@ def test_siggen_internal_rejects_invalid_phase25_combinations() -> None:
             signature_interface="external",
             pre_hash="preHash",
             context_hex=CONTEXT_HEX,
-        ),
-        lambda: siggen_internal(
-            "ML-DSA-44",
-            sk,
-            MESSAGE_HEX,
-            signature_interface="external",
-            pre_hash="preHash",
-            context_hex=CONTEXT_HEX,
-            hash_alg="SHAKE-128",
         ),
         lambda: siggen_internal(
             "ML-DSA-44",
@@ -725,16 +717,6 @@ def test_sigver_internal_rejects_invalid_external_mu_combinations() -> None:
             signature_interface="external",
             pre_hash="preHash",
             context_hex=CONTEXT_HEX,
-        ),
-        lambda: sigver_internal(
-            "ML-DSA-44",
-            keypair["pk"],
-            MESSAGE_HEX,
-            signature,
-            signature_interface="external",
-            pre_hash="preHash",
-            context_hex=CONTEXT_HEX,
-            hash_alg="SHAKE-256",
         ),
         lambda: sigver_internal(
             "ML-DSA-44",

@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..acvp_mldsa.constants import HASH_ALGORITHM_DIGEST_BYTES
 from .mldsa_constants import MLDSA_NATIVE_ORACLE_DIR, SUPPORTED_PARAMETER_SETS
 from .mldsa_errors import (
     MldsaOracleConfigError,
@@ -69,11 +70,14 @@ def hash_message_for_prehash(message_hex: str, hash_alg: Optional[str]) -> str:
         return hashlib.sha3_384(message).hexdigest().upper()
     if normalized == "SHA3-512":
         return hashlib.sha3_512(message).hexdigest().upper()
-    if normalized in {"SHAKE-128", "SHAKE-256"}:
-        raise MldsaOracleInputError(
-            "SHAKE hashAlg is not supported by the Python oracle because "
-            "ACVP output length is not represented in this API"
-        )
+    if normalized == "SHAKE-128":
+        return hashlib.shake_128(message).digest(
+            HASH_ALGORITHM_DIGEST_BYTES[normalized]
+        ).hex().upper()
+    if normalized == "SHAKE-256":
+        return hashlib.shake_256(message).digest(
+            HASH_ALGORITHM_DIGEST_BYTES[normalized]
+        ).hex().upper()
     raise MldsaOracleInputError(f"unsupported hashAlg {hash_alg!r}")
 
 

@@ -469,12 +469,13 @@ SHA3-224
 SHA3-256
 SHA3-384
 SHA3-512
+SHAKE-128
+SHAKE-256
 ```
 
-The native CLI also maps `SHAKE-128` and `SHAKE-256` to the corresponding
-`mldsa-native` prehash constants when the caller supplies an already-sized
-prehash. The Python/API oracle rejects SHAKE for external preHash because this
-API does not carry an explicit SHAKE output length.
+Phase 5-2 maps `SHAKE-128` to a 32-byte prehash and `SHAKE-256` to a 64-byte
+prehash. This matches the native CLI `parse_hash_alg()` mapping and allows
+Python/API expectedResults generation to cover SHAKE external preHash cases.
 
 ## Phase 2-7 generic expectedResults coverage
 
@@ -512,9 +513,8 @@ The existing keyGen-only endpoint remains available:
 POST /api/oracle/mldsa/keygen/expected-results
 ```
 
-Current limitation: generic sigGen/sigVer external preHash follows the
-Python/API oracle limitation for SHAKE and rejects `SHAKE-128` / `SHAKE-256`
-because this API does not carry an explicit SHAKE output length.
+Phase 5-2 generic sigGen/sigVer external preHash supports SHA2, SHA3,
+`SHAKE-128`, and `SHAKE-256`.
 
 ## Phase 2-8 generated import pipeline
 

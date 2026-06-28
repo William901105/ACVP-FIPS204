@@ -7,7 +7,6 @@ import pytest
 from fastapi.responses import JSONResponse
 
 from app.acvp_protocol.capabilities import (
-    SCHEMA_ACCEPTED_BUT_NOT_GENERATED_HASH_ALGS,
     is_registration_container,
     validate_registration_container,
 )
@@ -209,22 +208,19 @@ def test_duplicate_algorithm_mode_revision_rejected() -> None:
     assert_skeleton_metadata(body)
 
 
-def test_shake_hash_alg_is_warning_and_excluded_from_negotiated_hash_algs() -> None:
+def test_shake_hash_alg_is_accepted_for_generation() -> None:
     registration = siggen_registration()
     registration["capabilities"][0]["hashAlgs"] = ["SHA2-256", "SHAKE-256"]
 
     response = create_acvp_v1_test_session({"algorithms": [registration]})
 
     assert_skeleton_metadata(response)
-    assert "SHAKE-256" in SCHEMA_ACCEPTED_BUT_NOT_GENERATED_HASH_ALGS
     negotiated = response["negotiatedCapabilities"]["negotiated"][0]
-    assert negotiated["hashAlgs"] == ["SHA2-256"]
-    assert response["negotiationWarnings"]
-    assert response["negotiationWarnings"][0]["value"] == "SHAKE-256"
-    assert "not generated" in response["negotiationWarnings"][0]["reason"]
+    assert negotiated["hashAlgs"] == ["SHA2-256", "SHAKE-256"]
+    assert response["negotiationWarnings"] == []
 
 
-def test_registration_with_only_unsupported_generation_capabilities_returns_400() -> None:
+def test_registration_with_only_shake_generation_capabilities_is_accepted() -> None:
     registration = siggen_registration()
     registration["signatureInterfaces"] = ["external"]
     registration["preHash"] = ["preHash"]
@@ -233,11 +229,10 @@ def test_registration_with_only_unsupported_generation_capabilities_returns_400(
 
     response = create_acvp_v1_test_session({"algorithms": [registration]})
 
-    assert_json_response(response, 400)
-    body = body_of(response)
-    assert body["error"]["code"] == "UNSUPPORTED_CAPABILITIES"
-    assert body["error"]["path"] == "$.algorithms"
-    assert_skeleton_metadata(body)
+    assert_skeleton_metadata(response)
+    assert response["status"] == "vectorReady"
+    negotiated = response["negotiatedCapabilities"]["negotiated"][0]
+    assert negotiated["hashAlgs"] == ["SHAKE-256"]
 
 
 def test_prompt_based_phase_3_2_flow_still_works() -> None:

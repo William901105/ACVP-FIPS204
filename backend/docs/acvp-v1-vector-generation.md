@@ -165,7 +165,7 @@ Vector generation does not use wall-clock time for vector bytes. The Phase 3-5 c
 
 ## SHAKE
 
-`SHAKE-128` and `SHAKE-256` may be accepted by the schema, but Phase 3-4 does not generate SHAKE preHash cases because the current API does not represent SHAKE output length. If another supported hash remains, SHAKE appears in warnings/unsupported entries and is excluded from generated groups. If only SHAKE remains for preHash generation, the request is rejected.
+Phase 5-2 supports `SHAKE-128` and `SHAKE-256` for external `preHash` generation and expectedResults. The Python oracle computes `SHAKE-128` as a 32-byte prehash and `SHAKE-256` as a 64-byte prehash, matching the native wrapper's HashML-DSA mapping. Registrations that include only SHAKE preHash algorithms are now accepted and generated.
 
 ## Exclusions
 

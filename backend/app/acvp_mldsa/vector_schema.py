@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from .common import (
     child_path,
     require_absent,
+    require_allowed_fields,
     require_bool,
     require_enum,
     require_field,
@@ -16,12 +17,19 @@ from .common import (
 )
 from .constants import (
     ALGORITHM,
+    CONTEXT_MAX_BYTES,
     HASH_ALGORITHMS,
     MODES,
+    MU_BYTES,
     PARAMETER_SETS,
     PRE_HASH_VALUES,
+    PUBLIC_KEY_BYTES,
     REVISION,
+    RND_BYTES,
+    SECRET_KEY_BYTES,
+    SEED_BYTES,
     SIGNATURE_INTERFACES,
+    SIGNATURE_BYTES,
     TEST_TYPES,
 )
 from .errors import AcvpSchemaError
@@ -37,6 +45,11 @@ def validate_vector_set(payload: Any) -> Dict[str, Any]:
 
 
 def _validate_common_vector_set(obj: Dict[str, Any], path: str) -> str:
+    require_allowed_fields(
+        obj,
+        {"acvVersion", "vsId", "algorithm", "mode", "revision", "isSample", "testGroups"},
+        path,
+    )
     require_int(require_field(obj, "vsId", path), child_path(path, "vsId"))
     algorithm = require_string(require_field(obj, "algorithm", path), child_path(path, "algorithm"))
     if algorithm != ALGORITHM:
@@ -76,10 +89,10 @@ def _validate_groups(value: Any, path: str, mode: str) -> None:
     validate_unique_int_ids(all_tests, "tcId", "$.testGroups[*].tests")
 
 
-def _validate_common_group(group: Dict[str, Any], path: str) -> List[Any]:
+def _validate_common_group(group: Dict[str, Any], path: str) -> tuple[str, List[Any]]:
     require_int(require_field(group, "tgId", path), child_path(path, "tgId"))
     require_enum(require_field(group, "testType", path), TEST_TYPES, child_path(path, "testType"))
-    require_enum(
+    parameter_set = require_enum(
         require_field(group, "parameterSet", path),
         PARAMETER_SETS,
         child_path(path, "parameterSet"),
@@ -90,20 +103,27 @@ def _validate_common_group(group: Dict[str, Any], path: str) -> List[Any]:
         raise AcvpSchemaError("invalid_type", "Expected array", child_path(path, "tests"))
     if not tests:
         raise AcvpSchemaError("invalid_value", "Array must not be empty", child_path(path, "tests"))
-    return tests
+    return parameter_set, tests
 
 
 def _validate_keygen_group(group: Dict[str, Any], path: str) -> None:
-    tests = _validate_common_group(group, path)
+    require_allowed_fields(group, {"tgId", "testType", "parameterSet", "tests"}, path)
+    _, tests = _validate_common_group(group, path)
     for index, item in enumerate(tests):
         test_path = child_path(child_path(path, "tests"), index)
         test = require_object(item, test_path)
+        require_allowed_fields(test, {"tcId", "seed"}, test_path)
         require_int(require_field(test, "tcId", test_path), child_path(test_path, "tcId"))
-        require_hex_string(require_field(test, "seed", test_path), child_path(test_path, "seed"), allow_empty=False)
+        require_hex_string(
+            require_field(test, "seed", test_path),
+            child_path(test_path, "seed"),
+            allow_empty=False,
+            exact_bytes=SEED_BYTES,
+        )
 
 
 def _validate_siggen_group(group: Dict[str, Any], path: str) -> None:
-    tests = _validate_common_group(group, path)
+    parameter_set, tests = _validate_common_group(group, path)
     deterministic = require_bool(require_field(group, "deterministic", path), child_path(path, "deterministic"))
     signature_interface = require_enum(
         require_field(group, "signatureInterface", path),
@@ -114,24 +134,61 @@ def _validate_siggen_group(group: Dict[str, Any], path: str) -> None:
     external_mu = None
     pre_hash = None
     if signature_interface == "internal":
+        require_allowed_fields(
+            group,
+            {
+                "tgId",
+                "testType",
+                "parameterSet",
+                "deterministic",
+                "signatureInterface",
+                "externalMu",
+                "tests",
+            },
+            path,
+        )
         external_mu = require_bool(require_field(group, "externalMu", path), child_path(path, "externalMu"))
         require_absent(group, "preHash", path, "signatureInterface is internal")
     else:
+        require_allowed_fields(
+            group,
+            {
+                "tgId",
+                "testType",
+                "parameterSet",
+                "deterministic",
+                "signatureInterface",
+                "preHash",
+                "tests",
+            },
+            path,
+        )
         pre_hash = require_enum(require_field(group, "preHash", path), PRE_HASH_VALUES, child_path(path, "preHash"))
         require_absent(group, "externalMu", path, "signatureInterface is external")
 
     for index, item in enumerate(tests):
         test_path = child_path(child_path(path, "tests"), index)
         test = require_object(item, test_path)
-        _validate_common_siggen_test(test, test_path, deterministic)
         if signature_interface == "internal":
+            allowed = {"tcId", "sk", "mu" if external_mu else "message"}
+            if not deterministic:
+                allowed.add("rnd")
+            require_allowed_fields(test, allowed, test_path)
+            _validate_common_siggen_test(test, test_path, deterministic, parameter_set)
             _validate_internal_message_or_mu(test, test_path, bool(external_mu))
         else:
+            allowed = {"tcId", "sk", "message", "context"}
+            if pre_hash == "preHash":
+                allowed.add("hashAlg")
+            if not deterministic:
+                allowed.add("rnd")
+            require_allowed_fields(test, allowed, test_path)
+            _validate_common_siggen_test(test, test_path, deterministic, parameter_set)
             _validate_external_message(test, test_path, str(pre_hash))
 
 
 def _validate_sigver_group(group: Dict[str, Any], path: str) -> None:
-    tests = _validate_common_group(group, path)
+    parameter_set, tests = _validate_common_group(group, path)
     signature_interface = require_enum(
         require_field(group, "signatureInterface", path),
         SIGNATURE_INTERFACES,
@@ -141,36 +198,101 @@ def _validate_sigver_group(group: Dict[str, Any], path: str) -> None:
     external_mu = None
     pre_hash = None
     if signature_interface == "internal":
+        require_allowed_fields(
+            group,
+            {
+                "tgId",
+                "testType",
+                "parameterSet",
+                "signatureInterface",
+                "externalMu",
+                "tests",
+            },
+            path,
+        )
         external_mu = require_bool(require_field(group, "externalMu", path), child_path(path, "externalMu"))
         require_absent(group, "preHash", path, "signatureInterface is internal")
     else:
+        require_allowed_fields(
+            group,
+            {
+                "tgId",
+                "testType",
+                "parameterSet",
+                "signatureInterface",
+                "preHash",
+                "tests",
+            },
+            path,
+        )
         pre_hash = require_enum(require_field(group, "preHash", path), PRE_HASH_VALUES, child_path(path, "preHash"))
         require_absent(group, "externalMu", path, "signatureInterface is external")
 
     for index, item in enumerate(tests):
         test_path = child_path(child_path(path, "tests"), index)
         test = require_object(item, test_path)
+        if signature_interface == "internal":
+            require_allowed_fields(
+                test,
+                {"tcId", "pk", "signature", "mu" if external_mu else "message"},
+                test_path,
+            )
+        else:
+            allowed = {"tcId", "pk", "message", "context", "signature"}
+            if pre_hash == "preHash":
+                allowed.add("hashAlg")
+            require_allowed_fields(test, allowed, test_path)
         require_int(require_field(test, "tcId", test_path), child_path(test_path, "tcId"))
-        require_hex_string(require_field(test, "pk", test_path), child_path(test_path, "pk"), allow_empty=False)
-        require_hex_string(require_field(test, "signature", test_path), child_path(test_path, "signature"), allow_empty=False)
+        require_hex_string(
+            require_field(test, "pk", test_path),
+            child_path(test_path, "pk"),
+            allow_empty=False,
+            exact_bytes=PUBLIC_KEY_BYTES[parameter_set],
+        )
+        require_hex_string(
+            require_field(test, "signature", test_path),
+            child_path(test_path, "signature"),
+            allow_empty=False,
+            exact_bytes=SIGNATURE_BYTES[parameter_set],
+        )
         if signature_interface == "internal":
             _validate_internal_message_or_mu(test, test_path, bool(external_mu))
         else:
             _validate_external_message(test, test_path, str(pre_hash))
 
 
-def _validate_common_siggen_test(test: Dict[str, Any], path: str, deterministic: bool) -> None:
+def _validate_common_siggen_test(
+    test: Dict[str, Any],
+    path: str,
+    deterministic: bool,
+    parameter_set: str,
+) -> None:
     require_int(require_field(test, "tcId", path), child_path(path, "tcId"))
-    require_hex_string(require_field(test, "sk", path), child_path(path, "sk"), allow_empty=False)
+    require_hex_string(
+        require_field(test, "sk", path),
+        child_path(path, "sk"),
+        allow_empty=False,
+        exact_bytes=SECRET_KEY_BYTES[parameter_set],
+    )
     if deterministic:
         require_absent(test, "rnd", path, "deterministic is true")
     else:
-        require_hex_string(require_field(test, "rnd", path), child_path(path, "rnd"), allow_empty=False)
+        require_hex_string(
+            require_field(test, "rnd", path),
+            child_path(path, "rnd"),
+            allow_empty=False,
+            exact_bytes=RND_BYTES,
+        )
 
 
 def _validate_internal_message_or_mu(test: Dict[str, Any], path: str, external_mu: bool) -> None:
     if external_mu:
-        require_hex_string(require_field(test, "mu", path), child_path(path, "mu"), allow_empty=False)
+        require_hex_string(
+            require_field(test, "mu", path),
+            child_path(path, "mu"),
+            allow_empty=False,
+            exact_bytes=MU_BYTES,
+        )
         require_absent(test, "message", path, "externalMu is true")
     else:
         require_hex_string(require_field(test, "message", path), child_path(path, "message"), allow_empty=False)
@@ -181,7 +303,12 @@ def _validate_internal_message_or_mu(test: Dict[str, Any], path: str, external_m
 
 def _validate_external_message(test: Dict[str, Any], path: str, pre_hash: str) -> None:
     require_hex_string(require_field(test, "message", path), child_path(path, "message"), allow_empty=False)
-    require_hex_string(require_field(test, "context", path), child_path(path, "context"), allow_empty=True)
+    require_hex_string(
+        require_field(test, "context", path),
+        child_path(path, "context"),
+        allow_empty=True,
+        max_bytes=CONTEXT_MAX_BYTES,
+    )
     require_absent(test, "mu", path, "signatureInterface is external")
     if pre_hash == "preHash":
         require_enum(require_field(test, "hashAlg", path), HASH_ALGORITHMS, child_path(path, "hashAlg"))

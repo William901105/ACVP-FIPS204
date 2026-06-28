@@ -78,19 +78,12 @@ By default in Phase 3-5, registration sessions use `autoGenerateVectorSets=true`
 
 ## SHAKE Handling
 
-The ML-DSA schema constants include `SHAKE-128` and `SHAKE-256`, so those names may validate in `hashAlgs`. The local expectedResults/vector generation path does not generate SHAKE preHash cases because the current API does not represent SHAKE output length behavior. Phase 3-4 excludes SHAKE values from generated hash algorithm groups and returns a warning/unsupported entry when at least one non-SHAKE generated hash remains.
+Phase 5-2 supports `SHAKE-128` and `SHAKE-256` in `hashAlgs` for external `preHash`. Capability negotiation includes SHAKE values in negotiated `hashAlgs`, vector generation creates SHAKE preHash groups, and expectedResults uses the Python oracle with the same mapping as the native wrapper:
 
-If a registration requests only unsupported generated hash capabilities, the skeleton returns:
+- `SHAKE-128`: 32-byte prehash.
+- `SHAKE-256`: 64-byte prehash.
 
-```json
-{
-  "error": {
-    "code": "UNSUPPORTED_CAPABILITIES",
-    "message": "No supported ML-DSA capabilities were negotiated.",
-    "path": "$.algorithms"
-  }
-}
-```
+Registrations that include only SHAKE preHash algorithms are accepted when the remaining ML-DSA capabilities are supported.
 
 ## Exclusions
 

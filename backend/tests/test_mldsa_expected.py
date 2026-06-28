@@ -309,17 +309,6 @@ def test_siggen_endpoint_route_rejects_phase25_invalid_combinations() -> None:
             "preHash": "preHash",
             "context": CONTEXT_HEX,
         },
-        {
-            "parameterSet": "ML-DSA-44",
-            "signatureInterface": "external",
-            "externalMu": False,
-            "deterministic": True,
-            "sk": keygen.sk,
-            "message": MESSAGE_HEX,
-            "preHash": "preHash",
-            "context": CONTEXT_HEX,
-            "hashAlg": "SHAKE-128",
-        },
     )
 
     for payload in invalid_payloads:
@@ -609,17 +598,6 @@ def test_sigver_endpoint_route_rejects_phase25_invalid_combinations() -> None:
             "preHash": "preHash",
             "context": CONTEXT_HEX,
         },
-        {
-            "parameterSet": "ML-DSA-44",
-            "signatureInterface": "external",
-            "externalMu": False,
-            "pk": keygen.pk,
-            "message": MESSAGE_HEX,
-            "signature": signature,
-            "preHash": "preHash",
-            "context": CONTEXT_HEX,
-            "hashAlg": "SHAKE-256",
-        },
     )
 
     for payload in invalid_payloads:
@@ -685,7 +663,8 @@ def test_expected_results_endpoint_rejects_invalid_seed() -> None:
         mldsa_keygen_expected_results(MldsaKeygenExpectedResultsRequest(prompt=prompt))
 
     assert exc_info.value.status_code == 400
-    assert "64 hex" in str(exc_info.value.detail)
+    assert exc_info.value.detail["path"] == "$.testGroups[0].tests[0].seed"
+    assert "exactly 32 bytes" in exc_info.value.detail["message"]
 
 
 def test_expected_results_endpoint_reports_missing_native_binary(monkeypatch) -> None:

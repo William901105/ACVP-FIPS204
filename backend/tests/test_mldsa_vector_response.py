@@ -41,8 +41,8 @@ def test_vector_set_rejects_duplicate_tc_id() -> None:
                 "testType": "AFT",
                 "parameterSet": "ML-DSA-44",
                 "tests": [
-                    {"tcId": 1, "seed": "00"},
-                    {"tcId": 1, "seed": "02"},
+                    {"tcId": 1, "seed": "00" * 32},
+                    {"tcId": 1, "seed": "02" * 32},
                 ],
             }
         ],
@@ -66,4 +66,3 @@ def test_response_rejects_missing_keygen_pk() -> None:
 
     assert exc_info.value.code == "missing_required_field"
     assert exc_info.value.path == "$.testGroups[0].tests[0].pk"
-

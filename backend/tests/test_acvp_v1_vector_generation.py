@@ -314,7 +314,7 @@ def test_different_campaign_seed_changes_vector_data() -> None:
     assert first_prompt != prompts_for(second)[0]
 
 
-def test_shake_is_not_generated_when_supported_hash_remains() -> None:
+def test_shake_is_generated_when_registered_with_supported_hash() -> None:
     registration = siggen_registration(["external"], deterministic=[True])
     registration["capabilities"][0]["hashAlgs"] = ["SHA2-256", "SHAKE-256"]
     response = create_acvp_v1_test_session(
@@ -322,25 +322,22 @@ def test_shake_is_not_generated_when_supported_hash_remains() -> None:
     )
     prompt = prompts_for(response)[0]
 
-    assert response["negotiationWarnings"][0]["value"] == "SHAKE-256"
-    assert all(
-        test.get("hashAlg") != "SHAKE-256"
-        for group in prompt["testGroups"]
-        for test in group["tests"]
-    )
+    assert response["negotiationWarnings"] == []
+    assert {"SHA2-256", "SHAKE-256"}.issubset(_hash_algs_in_prompt(prompt))
 
 
-def test_only_shake_prehash_returns_400() -> None:
+def test_only_shake_prehash_generates_vectors() -> None:
     registration = siggen_registration(["external"], deterministic=[True])
     registration["preHash"] = ["preHash"]
     registration["capabilities"][0]["hashAlgs"] = ["SHAKE-256"]
 
-    response = create_acvp_v1_test_session({"algorithms": [registration]})
+    response = create_acvp_v1_test_session(
+        {"algorithms": [registration], "campaignSeed": CAMPAIGN_SEED}
+    )
+    prompt = prompts_for(response)[0]
 
-    assert_json_response(response, 400)
-    body = body_of(response)
-    assert body["error"]["code"] == "UNSUPPORTED_CAPABILITIES"
-    assert_skeleton_metadata(body)
+    assert_skeleton_metadata(response)
+    assert _hash_algs_in_prompt(prompt) == {"SHAKE-256"}
 
 
 def test_prompt_based_phase_3_2_flow_still_works() -> None:
@@ -398,6 +395,15 @@ def prompts_for(response: Dict[str, Any]) -> List[Dict[str, Any]]:
         get_acvp_v1_vector_set(vector_set_id)["prompt"]
         for vector_set_id in response["vectorSetIds"]
     ]
+
+
+def _hash_algs_in_prompt(prompt: Dict[str, Any]) -> set[str]:
+    return {
+        test["hashAlg"]
+        for group in prompt["testGroups"]
+        for test in group["tests"]
+        if "hashAlg" in test
+    }
 
 
 def full_registration() -> List[Dict[str, Any]]:

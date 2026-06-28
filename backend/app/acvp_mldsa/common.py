@@ -66,11 +66,22 @@ def require_absent(obj: Dict[str, Any], field: str, path: str, reason: str) -> N
         )
 
 
+def require_allowed_fields(obj: Dict[str, Any], allowed: Set[str], path: str) -> None:
+    for field in obj:
+        if field not in allowed:
+            raise AcvpSchemaError(
+                "unknown_field",
+                f"Unknown field: {field}",
+                child_path(path, field),
+            )
+
+
 def require_hex_string(
     value: Any,
     path: str,
     allow_empty: bool = True,
     exact_bytes: Optional[int] = None,
+    max_bytes: Optional[int] = None,
 ) -> str:
     text = require_string(value, path)
     if not allow_empty and text == "":
@@ -83,6 +94,12 @@ def require_hex_string(
         raise AcvpSchemaError(
             "invalid_hex",
             f"Hex string must be exactly {exact_bytes} bytes",
+            path,
+        )
+    if max_bytes is not None and len(text) > max_bytes * 2:
+        raise AcvpSchemaError(
+            "invalid_hex",
+            f"Hex string must be at most {max_bytes} bytes",
             path,
         )
     return text.upper()
