@@ -68,10 +68,12 @@ from .storage.sqlite_store import (
     DEMO_SESSION_STORE,
     IMPORT_STORE,
     delete_demo_session as delete_demo_session_record,
+    get_db_path,
     get_import_record,
     init_db,
     list_demo_sessions as list_demo_session_records,
     record_state_event,
+    reset_db_for_tests,
     save_demo_session,
     save_import_record,
     update_import_validation,
@@ -643,6 +645,22 @@ def delete_demo_acvp_session(session_id: str) -> Dict[str, Any]:
     return {
         "deleted": True,
         "sessionId": session_id,
+        "demoOnly": True,
+        "notProductionAcvp": True,
+    }
+
+
+@app.delete("/api/demo/clear")
+def clear_demo_data(confirm: bool = False) -> Dict[str, Any]:
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to clear local demo data")
+    db_path = get_db_path()
+    deleted_files = [str(db_path)] if db_path.exists() else []
+    reset_db_for_tests()
+    return {
+        "deleted": True,
+        "deletedFiles": deleted_files,
+        "message": "Local demo database records and current SQLite file were cleared.",
         "demoOnly": True,
         "notProductionAcvp": True,
     }

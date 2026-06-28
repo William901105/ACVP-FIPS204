@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   API_BASE_URL,
   ApiError,
+  clearDemoData,
   createAcvpSession,
   expectedDeniedView,
   getAcvpExpectedResults,
@@ -75,6 +76,9 @@ export default function App() {
   const isStrict = workflowProfile === "strict";
   const activeVectorSummary = vectorSets.find((item) => item.vectorSetId === activeVectorSetId) ?? null;
   const activeReport = vectorResult?.report ?? null;
+  const policyWorkflowProfile = activeVectorSet ? workflowProfileForVectorSet(activeVectorSet) : "strict";
+  const requestWorkflowProfile = activeVectorSet ? policyWorkflowProfile : workflowProfile;
+  const policyIsStrict = policyWorkflowProfile === "strict";
   const canUploadResponse = Boolean(activeSession && activeVectorSetId) && !isBusy;
   const campaignSeedValidation = useMemo(() => validateCampaignSeed(campaignSeed), [campaignSeed]);
   const campaignSeedInvalid = isEnabled && !campaignSeedValidation.valid;
@@ -229,28 +233,37 @@ export default function App() {
     setIutResponseErrorDetail("");
     setRawTab("prompt");
 
-    if (isStrict && !vectorSample) {
+    const vectorWorkflowProfile = workflowProfileForVectorSet(vector);
+    if (vectorWorkflowProfile === "strict" && !vectorSample) {
       setExpectedView(expectedDeniedView(STRICT_EXPECTED_HIDDEN_MESSAGE));
     } else {
-      await loadExpectedResults(sessionId, vectorSetId, false);
+      await loadExpectedResults(sessionId, vectorSetId, false, vectorWorkflowProfile, vectorSample);
     }
 
     setVectorSets(await getAcvpSessionVectorSets(sessionId, { workflowProfile }));
   }
 
-  async function loadExpectedResults(sessionId?: string, vectorSetId?: string, automatic = false) {
+  async function loadExpectedResults(
+    sessionId?: string,
+    vectorSetId?: string,
+    automatic = false,
+    profileOverride?: AcvpWorkflowProfile,
+    sampleOverride?: boolean
+  ) {
     const resolvedSessionId = sessionId ?? activeSession?.testSessionId;
     const resolvedVectorSetId = vectorSetId ?? activeVectorSetId;
+    const expectedWorkflowProfile = profileOverride ?? requestWorkflowProfile;
+    const expectedIsSample = sampleOverride ?? activeVectorIsSample;
     if (!resolvedSessionId || !resolvedVectorSetId) {
       setMessage("Select a Test Session and Vector Set before requesting expected results.");
       return;
     }
-    if (automatic && isStrict && !activeVectorIsSample) {
+    if (automatic && expectedWorkflowProfile === "strict" && !expectedIsSample) {
       setExpectedView(expectedDeniedView(STRICT_EXPECTED_HIDDEN_MESSAGE));
       return;
     }
     try {
-      const expected = await getAcvpExpectedResults(resolvedSessionId, resolvedVectorSetId, { workflowProfile });
+      const expected = await getAcvpExpectedResults(resolvedSessionId, resolvedVectorSetId, { workflowProfile: expectedWorkflowProfile });
       setExpectedView(expected);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
@@ -294,19 +307,19 @@ export default function App() {
         activeSession.testSessionId,
         activeVectorSetId,
         uploadedResponse,
-        { workflowProfile }
+        { workflowProfile: policyWorkflowProfile }
       );
-      const result = isStrict
-        ? await getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile })
-        : immediateResult ?? (await getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile }));
+      const result = policyIsStrict
+        ? await getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile: policyWorkflowProfile })
+        : immediateResult ?? (await getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile: policyWorkflowProfile }));
       setVectorResult(result);
       setIutResponseStatus("ready");
       setIutResponseErrorDetail("");
-      setActiveSession(await getAcvpSession(activeSession.testSessionId, { workflowProfile }));
-      setVectorSets(await getAcvpSessionVectorSets(activeSession.testSessionId, { workflowProfile }));
-      setSessionResults(await getAcvpSessionResults(activeSession.testSessionId, { workflowProfile }));
+      setActiveSession(await getAcvpSession(activeSession.testSessionId, { workflowProfile: policyWorkflowProfile }));
+      setVectorSets(await getAcvpSessionVectorSets(activeSession.testSessionId, { workflowProfile: policyWorkflowProfile }));
+      setSessionResults(await getAcvpSessionResults(activeSession.testSessionId, { workflowProfile: policyWorkflowProfile }));
       setRawTab("vector-results");
-      setMessage(isStrict ? "Response accepted with 204 No Content. Disposition loaded from GET results." : "Response validated.");
+      setMessage(policyIsStrict ? "Response accepted with 204 No Content. Disposition loaded from GET results." : "Response validated.");
     }, (errorMessage) => {
       setIutResponseStatus("error");
       setIutResponseErrorDetail(errorMessage);
@@ -319,8 +332,24 @@ export default function App() {
       return;
     }
     await runBusy(async () => {
-      setSessionResults(await getAcvpSessionResults(activeSession.testSessionId, { workflowProfile }));
+      setSessionResults(await getAcvpSessionResults(activeSession.testSessionId, { workflowProfile: requestWorkflowProfile }));
       setRawTab("session-results");
+    });
+  }
+
+  async function cleanAllData() {
+    const confirmed = window.confirm(
+      "This deletes all local demo database records for sessions, vector sets, prompts, responses, reports, and the current SQLite file. Continue?"
+    );
+    if (!confirmed) {
+      return;
+    }
+    await runBusy(async () => {
+      const result = await clearDemoData();
+      clearWorkspace();
+      setSessions([]);
+      setMessage(`${result.message} Deleted files: ${result.deletedFiles.length}.`);
+      await refreshSessions();
     });
   }
 
@@ -362,18 +391,23 @@ export default function App() {
           <h1>Strict workflow-aware ACVP client</h1>
           <p className="topbar-detail">Backend {API_BASE_URL}</p>
         </div>
-        <div className="status-cluster">
-          <StatusChip label={serverStatus} tone={serverStatus} />
-          <StatusChip label={workflowProfile} tone={workflowProfile} />
-          <StatusChip label={isSample ? "sample" : "non-sample"} tone={isSample ? "sample" : "non-sample"} />
-          <StatusChip label="not production ACVP" tone="warning" />
-        </div>
+        {activeVectorSet ? (
+          <div className="status-cluster">
+            <StatusChip label={serverStatus} tone={serverStatus} />
+            <StatusChip label={policyWorkflowProfile} tone={policyWorkflowProfile} />
+            <StatusChip label={activeVectorIsSample ? "sample" : "non-sample"} tone={activeVectorIsSample ? "sample" : "non-sample"} />
+            <StatusChip label="not production ACVP" tone="warning" />
+          </div>
+        ) : null}
         <div className="actions">
           <button type="button" onClick={() => refreshSessions().catch((error: Error) => setMessage(error.message))} disabled={!isEnabled || isBusy}>
             Refresh
           </button>
           <button type="button" className="secondary" onClick={clearWorkspace} disabled={isBusy}>
             Clear
+          </button>
+          <button type="button" className="danger" onClick={cleanAllData} disabled={isBusy}>
+            Clean
           </button>
         </div>
       </header>
@@ -594,7 +628,7 @@ export default function App() {
           </div>
           <p className="subtle">
             {expectedView?.reason ??
-              (isStrict
+              (policyIsStrict
                 ? "Strict sample vector sets return direct expected payloads. Strict non-sample vector sets hide expected results."
                 : "Local mode preserves the local expectedResults wrapper behavior.")}
           </p>
@@ -602,17 +636,9 @@ export default function App() {
             <button
               type="button"
               onClick={() => loadExpectedResults().catch((error: Error) => setMessage(error.message))}
-              disabled={!activeVectorSet || (isStrict && !activeVectorIsSample) || isBusy}
+              disabled={!activeVectorSet || (policyIsStrict && !activeVectorIsSample) || isBusy}
             >
               Load expected
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => loadExpectedResults(undefined, undefined, false).catch((error: Error) => setMessage(error.message))}
-              disabled={!activeVectorSet || isBusy || (!isStrict && !expectedView)}
-            >
-              Policy check
             </button>
             <button
               type="button"
@@ -672,7 +698,7 @@ export default function App() {
               onClick={() =>
                 activeSession &&
                 activeVectorSetId &&
-                getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile })
+                getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile: requestWorkflowProfile })
                   .then((result) => {
                     setVectorResult(result);
                     setRawTab("vector-results");
@@ -686,12 +712,30 @@ export default function App() {
             <button type="button" className="secondary" onClick={refreshSessionResults} disabled={!activeSession || isBusy}>
               GET session results
             </button>
-            <button type="button" className="secondary" onClick={() => activeReport && downloadJson(`report-${activeReport.importId}.json`, activeReport)} disabled={!activeReport}>
-              Export local report JSON
-            </button>
-            <button type="button" className="secondary" onClick={() => activeReport && downloadText(`report-${activeReport.importId}.md`, activeReport.markdown)} disabled={!activeReport}>
-              Export local report MD
-            </button>
+            {policyIsStrict ? (
+              <>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => vectorResult && downloadJson(`vectorSet-results-${activeVectorSetId ?? "vector"}.json`, vectorResult.raw ?? vectorResult)}
+                  disabled={!activeVectorSet || !vectorResult}
+                >
+                  Export vectorSet results JSON
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => sessionResults && downloadJson(`session-results-${activeSession?.testSessionId ?? "session"}.json`, sessionResults.raw ?? sessionResults)}
+                  disabled={!activeVectorSet || !sessionResults}
+                >
+                  Export session results JSON
+                </button>
+              </>
+            ) : (
+              <button type="button" className="secondary" onClick={() => activeReport && downloadJson(`report-${activeReport.importId}.json`, activeReport)} disabled={!activeReport}>
+                Export local report JSON
+              </button>
+            )}
           </div>
           <ResultTable result={vectorResult} />
           <ReportPane report={activeReport} />
@@ -1037,6 +1081,10 @@ function vectorSetIsSample(
     return session.isSample;
   }
   return fallback;
+}
+
+function workflowProfileForVectorSet(vector: NormalizedVectorSetView): AcvpWorkflowProfile {
+  return vector.sourceShape === "strict-payload" ? "strict" : "local";
 }
 
 function rawValueForTab(

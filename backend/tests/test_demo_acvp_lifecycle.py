@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.crypto_oracle.mldsa_oracle import keygen_internal
 from app.main import (
     DEMO_SESSION_STORE,
+    clear_demo_data,
     create_demo_acvp_session,
     delete_demo_acvp_session,
     get_demo_acvp_session,
@@ -172,6 +173,22 @@ def test_delete_session_removes_it() -> None:
     with pytest.raises(HTTPException) as exc_info:
         get_demo_acvp_session(session["sessionId"])
     assert exc_info.value.status_code == 404
+
+
+def test_clear_demo_data_requires_confirmation_and_resets_store() -> None:
+    session = create_demo_acvp_session(
+        DemoAcvpSessionCreateRequest(prompt=_keygen_prompt())
+    )
+
+    with pytest.raises(HTTPException) as confirm_exc:
+        clear_demo_data()
+    cleaned = clear_demo_data(confirm=True)
+
+    assert confirm_exc.value.status_code == 400
+    assert cleaned["deleted"] is True
+    with pytest.raises(HTTPException) as get_exc:
+        get_demo_acvp_session(session["sessionId"])
+    assert get_exc.value.status_code == 404
 
 
 def _keypair() -> Dict[str, str]:

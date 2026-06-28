@@ -107,6 +107,24 @@ GET /acvp/v1/testSessions/{sessionId}/vectorSets/{vectorSetId}/results?workflowP
 
 to display `passed`, `fail`, `unreceived`, or another disposition.
 
+## Export Policy
+
+The visible export buttons follow the currently selected Vector Set shape.
+
+| Selected Vector Set | Export buttons |
+| --- | --- |
+| strict payload | `Export vectorSet results JSON`, `Export session results JSON` |
+| local wrapper | `Export local report JSON` |
+| none selected | strict export buttons are shown disabled |
+
+The local report Markdown export is intentionally not shown.
+
+## Clean Button
+
+The `Clean` button asks for browser confirmation, then calls the local demo
+cleanup endpoint. It clears sessions, vector sets, prompts, responses, reports,
+imports, and recreates the current SQLite database file.
+
 ## FIPS203 Status
 
 FIPS203 / ML-KEM remains visible but disabled because the backend is not merged yet. The UI does not submit ML-KEM registration payloads and does not include a fake FIPS203 provider.

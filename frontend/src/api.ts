@@ -151,6 +151,12 @@ export async function getReport(importId: string): Promise<Report> {
   return request<Report>(`/api/report/${importId}`);
 }
 
+export async function clearDemoData(): Promise<{ deleted: boolean; deletedFiles: string[]; message: string }> {
+  return request<{ deleted: boolean; deletedFiles: string[]; message: string }>("/api/demo/clear?confirm=true", {
+    method: "DELETE"
+  });
+}
+
 export async function listAcvpSessions(options: AcvpClientOptions = {}, status?: string): Promise<AcvpSessionSummary[]> {
   const payload = await request<{ testSessions: AcvpSessionSummary[] }>(
     withQuery("/acvp/v1/testSessions", {
