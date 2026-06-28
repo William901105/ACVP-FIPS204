@@ -24,6 +24,7 @@ export const FIPS_REGISTRY: FipsVersionConfig[] = [
     revision: "FIPS203",
     enabled: false,
     status: "in-development",
+    disabledReason: "FIPS203 / ML-KEM backend is not merged yet.",
     modes: [],
     parameterSets: [],
     defaultParameterSets: []

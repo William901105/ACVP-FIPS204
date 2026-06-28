@@ -89,6 +89,13 @@ select {
   letter-spacing: 0;
 }
 
+.topbar-detail {
+  margin: 6px 0 0;
+  color: #52616a;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: #7b4d14;
@@ -99,11 +106,17 @@ select {
 
 .actions,
 .vector-toolbar,
-.segmented {
+.segmented,
+.status-cluster {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.status-cluster {
+  justify-content: flex-end;
+  max-width: 520px;
 }
 
 .notice {
@@ -197,6 +210,41 @@ select {
   color: #59408a;
 }
 
+.state-chip.online,
+.state-chip.strict,
+.state-chip.sample,
+.state-chip.passed,
+.state-chip.local-wrapper,
+.state-chip.strict-payload {
+  background: #dff5e8;
+  color: #0f6b3f;
+}
+
+.state-chip.offline,
+.state-chip.denied,
+.state-chip.fail,
+.state-chip.failed {
+  background: #ffe9e6;
+  color: #a3332d;
+}
+
+.state-chip.checking,
+.state-chip.local,
+.state-chip.non-sample,
+.state-chip.info,
+.state-chip.unreceived {
+  background: #e6f0ff;
+  color: #244f92;
+}
+
+.state-chip.warning,
+.state-chip.in-development,
+.state-chip.not\ loaded,
+.state-chip.unavailable {
+  background: #fff7d7;
+  color: #6f5011;
+}
+
 .count-pill {
   background: #25313f;
   color: #fff;
@@ -254,6 +302,14 @@ select {
 
 .segmented button {
   min-height: 32px;
+}
+
+.segmented.fixed button {
+  min-width: 118px;
+}
+
+.raw-tabs button {
+  min-width: 112px;
 }
 
 .file-button {
@@ -483,6 +539,55 @@ select {
   white-space: pre-wrap;
 }
 
+.result-table,
+.session-results-list {
+  display: grid;
+  gap: 6px;
+}
+
+.result-row,
+.session-result-item {
+  display: grid;
+  grid-template-columns: minmax(64px, 96px) minmax(80px, 120px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #d8e0e2;
+  border-radius: 6px;
+  background: #fbfcfc;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.result-row span,
+.session-result-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-head {
+  background: #eef3ff;
+  color: #25313f;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.session-result-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.session-result-item strong {
+  color: #16635d;
+}
+
+.warning-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #52616a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 @media (max-width: 1180px) {
   .workflow-grid {
     grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -502,13 +607,19 @@ select {
     display: grid;
   }
 
+  .status-cluster {
+    justify-content: flex-start;
+  }
+
   .topbar h1 {
     font-size: 22px;
   }
 
   .workflow-grid,
   .metadata-grid,
-  .summary-strip {
+  .summary-strip,
+  .result-row,
+  .session-result-item {
     grid-template-columns: 1fr;
   }
 

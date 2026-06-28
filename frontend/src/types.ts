@@ -8,6 +8,11 @@ export type JsonValue =
 
 export type JsonObject = Record<string, JsonValue>;
 
+export type AcvpWorkflowProfile = "local" | "strict";
+export type AcvpGenerationProfile = "local-debug" | "nist-conformance";
+
+export type AcvpEnvelope<T> = [{ acvVersion: string }, T];
+
 export interface ImportSummary {
   importId: string;
   label?: string | null;
@@ -139,6 +144,7 @@ export interface FipsVersionConfig {
   revision: string;
   enabled: boolean;
   status: "available" | "in-development";
+  disabledReason?: string;
   modes: CapabilityModeConfig[];
   parameterSets: string[];
   defaultParameterSets: string[];
@@ -157,6 +163,9 @@ export interface AcvpSessionSummary {
   revision?: string | null;
   testGroupCount?: number;
   testCaseCount?: number;
+  generationProfile?: AcvpGenerationProfile;
+  workflowProfile?: AcvpWorkflowProfile;
+  isSample?: boolean;
   productionReady: boolean;
   profile: string;
   demoOnly: boolean;
@@ -238,4 +247,82 @@ export interface AcvpSessionResults {
   profile: string;
   demoOnly: boolean;
   notProductionAcvp: boolean;
+}
+
+export type AcvpVectorSetPayload = AcvpVectorSet;
+export type AcvpExpectedPayload = AcvpVectorSet;
+
+export interface AcvpStrictVectorSetResultTest {
+  tgId?: number | string;
+  tcId?: number | string;
+  result?: string;
+  reason?: string;
+  expected?: JsonValue | null;
+  provided?: JsonValue | null;
+  [key: string]: JsonValue | undefined;
+}
+
+export interface AcvpStrictVectorSetResultsBody {
+  vsId?: number | string;
+  disposition: string;
+  tests: AcvpStrictVectorSetResultTest[];
+  [key: string]: JsonValue | AcvpStrictVectorSetResultTest[] | undefined;
+}
+
+export interface AcvpStrictVectorSetResults {
+  results: AcvpStrictVectorSetResultsBody;
+}
+
+export interface AcvpStrictSessionResultItem {
+  vectorSetUrl: string;
+  status: string;
+  disposition?: string;
+  [key: string]: JsonValue | undefined;
+}
+
+export interface AcvpStrictSessionResults {
+  passed: boolean;
+  results: AcvpStrictSessionResultItem[];
+  [key: string]: JsonValue | AcvpStrictSessionResultItem[];
+}
+
+export type NormalizedSourceShape = "local-wrapper" | "strict-payload";
+
+export interface NormalizedVectorSetView {
+  vectorSetId?: string;
+  sessionId?: string;
+  status?: string;
+  prompt: AcvpVectorSetPayload;
+  raw: unknown;
+  sourceShape: NormalizedSourceShape;
+}
+
+export interface NormalizedExpectedView {
+  available: boolean;
+  denied: boolean;
+  reason?: string;
+  expectedResults?: AcvpExpectedPayload;
+  raw?: unknown;
+  sourceShape?: NormalizedSourceShape;
+}
+
+export interface NormalizedVectorSetResultView {
+  disposition: string;
+  tests: AcvpStrictVectorSetResultTest[];
+  raw: unknown;
+  sourceShape: NormalizedSourceShape;
+  status?: string;
+  validationResult?: ValidationResult;
+  report?: Report;
+  acvpResults?: AcvpStrictVectorSetResults;
+}
+
+export interface NormalizedSessionResultsView {
+  passed?: boolean;
+  results: AcvpStrictSessionResultItem[];
+  raw: unknown;
+  sourceShape: NormalizedSourceShape;
+  status?: string;
+  summary?: JsonObject;
+  vectorSetResults?: AcvpVectorSetResult[];
 }

@@ -1,69 +1,87 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  API_BASE_URL,
+  ApiError,
   createAcvpSession,
+  expectedDeniedView,
   getAcvpExpectedResults,
   getAcvpSession,
   getAcvpSessionResults,
   getAcvpSessionVectorSets,
-  getAcvpVectorSet,
+  getAcvpVectorSetPrompt,
+  getAcvpVectorSetResults,
   listAcvpSessions,
   submitAcvpVectorSetResults
 } from "./api";
 import JsonViewer from "./components/JsonViewer";
 import { FIPS_REGISTRY, getFipsConfig } from "./registry";
 import type {
-  AcvpExpectedResults,
+  AcvpGenerationProfile,
   AcvpSessionDetail,
-  AcvpSessionResults,
   AcvpSessionSummary,
-  AcvpVectorSetDownload,
-  AcvpVectorSetResult,
   AcvpVectorSetSummary,
+  AcvpWorkflowProfile,
   CapabilityMode,
   FipsVersionConfig,
   FipsVersionId,
   JsonObject,
   JsonValue,
+  NormalizedExpectedView,
+  NormalizedSessionResultsView,
+  NormalizedVectorSetResultView,
+  NormalizedVectorSetView,
   Report
 } from "./types";
 
 const DEFAULT_TESTS_PER_GROUP = 1;
 const DEFAULT_CAMPAIGN_SEED = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
+const STRICT_EXPECTED_HIDDEN_MESSAGE =
+  "Hidden expectedResults: non-sample strict sessions cannot download expected results. Server-side validation still uses hidden expectedResults.";
 
 type IutResponseStatus = "waiting" | "loaded" | "ready" | "error";
+type ServerStatus = "checking" | "online" | "offline";
+type RawTab = "session" | "prompt" | "expected" | "uploaded" | "vector-results" | "session-results";
 
 export default function App() {
   const [fipsId, setFipsId] = useState<FipsVersionId>("FIPS204");
   const config = useMemo(() => getFipsConfig(fipsId), [fipsId]);
+  const [workflowProfile, setWorkflowProfile] = useState<AcvpWorkflowProfile>("strict");
+  const [generationProfile, setGenerationProfile] = useState<AcvpGenerationProfile>("nist-conformance");
+  const [isSample, setIsSample] = useState(false);
   const [selectedModes, setSelectedModes] = useState<CapabilityMode[]>(["keyGen"]);
   const [selectedParameterSets, setSelectedParameterSets] = useState<string[]>(["ML-DSA-44"]);
   const [campaignSeed, setCampaignSeed] = useState(DEFAULT_CAMPAIGN_SEED);
   const [testsPerGroup, setTestsPerGroup] = useState(DEFAULT_TESTS_PER_GROUP);
-  const [label, setLabel] = useState("local ML-DSA registration");
+  const [label, setLabel] = useState("strict ML-DSA registration");
   const [sessions, setSessions] = useState<AcvpSessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<AcvpSessionDetail | null>(null);
   const [vectorSets, setVectorSets] = useState<AcvpVectorSetSummary[]>([]);
   const [activeVectorSetId, setActiveVectorSetId] = useState<string | null>(null);
-  const [activeVectorSet, setActiveVectorSet] = useState<AcvpVectorSetDownload | null>(null);
-  const [expectedResults, setExpectedResults] = useState<AcvpExpectedResults | null>(null);
+  const [activeVectorSet, setActiveVectorSet] = useState<NormalizedVectorSetView | null>(null);
+  const [expectedView, setExpectedView] = useState<NormalizedExpectedView | null>(null);
   const [uploadedResponse, setUploadedResponse] = useState<JsonValue | null>(null);
   const [uploadedResponseName, setUploadedResponseName] = useState("");
   const [iutResponseStatus, setIutResponseStatus] = useState<IutResponseStatus>("waiting");
   const [iutResponseErrorDetail, setIutResponseErrorDetail] = useState("");
   const [promptImportName, setPromptImportName] = useState("");
-  const [vectorResult, setVectorResult] = useState<AcvpVectorSetResult | null>(null);
-  const [sessionResults, setSessionResults] = useState<AcvpSessionResults | null>(null);
+  const [vectorResult, setVectorResult] = useState<NormalizedVectorSetResultView | null>(null);
+  const [sessionResults, setSessionResults] = useState<NormalizedSessionResultsView | null>(null);
   const [message, setMessage] = useState("");
+  const [serverStatus, setServerStatus] = useState<ServerStatus>("checking");
+  const [rawTab, setRawTab] = useState<RawTab>("prompt");
   const [isBusy, setIsBusy] = useState(false);
 
   const isEnabled = config.enabled;
+  const isStrict = workflowProfile === "strict";
   const activeVectorSummary = vectorSets.find((item) => item.vectorSetId === activeVectorSetId) ?? null;
   const activeReport = vectorResult?.report ?? null;
   const canUploadResponse = Boolean(activeSession && activeVectorSetId) && !isBusy;
   const campaignSeedValidation = useMemo(() => validateCampaignSeed(campaignSeed), [campaignSeed]);
   const campaignSeedInvalid = isEnabled && !campaignSeedValidation.valid;
   const iutResponseLabel = responseStatusLabel(iutResponseStatus);
-  const canValidateResponse = Boolean(activeVectorSetId && uploadedResponse != null && iutResponseStatus === "ready") && !isBusy;
+  const canSubmitResponse = Boolean(activeVectorSetId && uploadedResponse != null && iutResponseStatus === "ready") && !isBusy;
+  const activeVectorIsSample = vectorSetIsSample(activeVectorSet, activeSession, isSample);
+  const rawInspectorValue = rawValueForTab(rawTab, activeSession, activeVectorSet, expectedView, uploadedResponse, vectorResult, sessionResults);
 
   useEffect(() => {
     setSelectedModes(config.modes.filter((mode) => mode.enabled).slice(0, 1).map((mode) => mode.id));
@@ -73,14 +91,37 @@ export default function App() {
       refreshSessions().catch((error: Error) => setMessage(error.message));
     } else {
       setSessions([]);
+      setServerStatus("online");
     }
-  }, [config.id]);
+  }, [config.id, workflowProfile]);
 
   async function refreshSessions() {
     if (!config.enabled) {
       return;
     }
-    setSessions(await listAcvpSessions());
+    setServerStatus("checking");
+    try {
+      const items = await listAcvpSessions({ workflowProfile });
+      setSessions(items);
+      setServerStatus("online");
+    } catch (error) {
+      setServerStatus("offline");
+      throw error;
+    }
+  }
+
+  function applyWorkflowProfile(profile: AcvpWorkflowProfile) {
+    setWorkflowProfile(profile);
+    if (profile === "strict") {
+      setGenerationProfile("nist-conformance");
+      setIsSample(false);
+      setLabel("strict ML-DSA registration");
+    } else {
+      setGenerationProfile("local-debug");
+      setIsSample(true);
+      setLabel("local ML-DSA registration");
+    }
+    clearWorkspace();
   }
 
   async function createRegistrationSession() {
@@ -101,12 +142,18 @@ export default function App() {
         label,
         campaignSeed: campaignSeed.trim() || undefined,
         testsPerGroup,
+        generationProfile,
+        isSample,
         autoGenerateVectorSets: true
       };
-      const created = await createAcvpSession(payload as JsonValue);
+      const created = await createAcvpSession(payload as JsonValue, {
+        workflowProfile,
+        generationProfile,
+        isSample
+      });
       await refreshSessions();
       await activateSession(created.testSessionId);
-      setMessage("Capability registration accepted.");
+      setMessage("Test session created.");
     });
   }
 
@@ -116,11 +163,18 @@ export default function App() {
     }
     await runBusy(async () => {
       const prompt = await readJsonFile(file);
-      const created = await createAcvpSession({
-        prompt,
-        label: `prompt:${file.name}`,
-        autoGenerateExpectedResults: true
-      } as JsonValue);
+      const created = await createAcvpSession(
+        {
+          prompt,
+          label: `prompt:${file.name}`,
+          autoGenerateExpectedResults: true,
+          isSample
+        } as JsonValue,
+        {
+          workflowProfile,
+          isSample
+        }
+      );
       setPromptImportName(file.name);
       await refreshSessions();
       await activateSession(created.testSessionId);
@@ -130,8 +184,8 @@ export default function App() {
 
   async function activateSession(sessionId: string) {
     await runBusy(async () => {
-      const detail = await getAcvpSession(sessionId);
-      const vectors = await getAcvpSessionVectorSets(sessionId);
+      const detail = await getAcvpSession(sessionId, { workflowProfile });
+      const vectors = await getAcvpSessionVectorSets(sessionId, { workflowProfile });
       setActiveSession(detail);
       setVectorSets(vectors);
       setSessionResults(null);
@@ -143,33 +197,67 @@ export default function App() {
       const firstVectorId = vectors[0]?.vectorSetId ?? null;
       setActiveVectorSetId(firstVectorId);
       if (firstVectorId) {
-        await loadVectorSet(firstVectorId, detail.testSessionId);
+        await loadVectorSet(firstVectorId, detail.testSessionId, detail);
       } else {
         setActiveVectorSet(null);
-        setExpectedResults(null);
+        setExpectedView(null);
       }
     });
   }
 
   async function activateVectorSet(vectorSetId: string) {
+    const sessionId = activeSession?.testSessionId;
+    if (!sessionId) {
+      setMessage("Select a Test Session before opening a vector set.");
+      return;
+    }
     await runBusy(async () => {
-      await loadVectorSet(vectorSetId, activeSession?.testSessionId);
+      await loadVectorSet(vectorSetId, sessionId, activeSession);
     });
   }
 
-  async function loadVectorSet(vectorSetId: string, sessionId?: string) {
-    const vector = await getAcvpVectorSet(vectorSetId);
-    const expected = await getAcvpExpectedResults(vectorSetId);
+  async function loadVectorSet(vectorSetId: string, sessionId: string, session: AcvpSessionDetail | null) {
+    const vector = await getAcvpVectorSetPrompt(sessionId, vectorSetId, { workflowProfile });
+    const vectorSample = vectorSetIsSample(vector, session, isSample);
     setActiveVectorSetId(vectorSetId);
     setActiveVectorSet(vector);
-    setExpectedResults(expected);
     setVectorResult(null);
+    setSessionResults(null);
     setUploadedResponse(null);
     setUploadedResponseName("");
     setIutResponseStatus("waiting");
     setIutResponseErrorDetail("");
-    if (sessionId) {
-      setVectorSets(await getAcvpSessionVectorSets(sessionId));
+    setRawTab("prompt");
+
+    if (isStrict && !vectorSample) {
+      setExpectedView(expectedDeniedView(STRICT_EXPECTED_HIDDEN_MESSAGE));
+    } else {
+      await loadExpectedResults(sessionId, vectorSetId, false);
+    }
+
+    setVectorSets(await getAcvpSessionVectorSets(sessionId, { workflowProfile }));
+  }
+
+  async function loadExpectedResults(sessionId?: string, vectorSetId?: string, automatic = false) {
+    const resolvedSessionId = sessionId ?? activeSession?.testSessionId;
+    const resolvedVectorSetId = vectorSetId ?? activeVectorSetId;
+    if (!resolvedSessionId || !resolvedVectorSetId) {
+      setMessage("Select a Test Session and Vector Set before requesting expected results.");
+      return;
+    }
+    if (automatic && isStrict && !activeVectorIsSample) {
+      setExpectedView(expectedDeniedView(STRICT_EXPECTED_HIDDEN_MESSAGE));
+      return;
+    }
+    try {
+      const expected = await getAcvpExpectedResults(resolvedSessionId, resolvedVectorSetId, { workflowProfile });
+      setExpectedView(expected);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setExpectedView(expectedDeniedView(error.message));
+        return;
+      }
+      throw error;
     }
   }
 
@@ -184,7 +272,8 @@ export default function App() {
       setIutResponseErrorDetail("");
       setVectorResult(null);
       setSessionResults(null);
-      setMessage("");
+      setRawTab("uploaded");
+      setMessage("Browser JSON syntax check passed. Backend validates ACVP schema on submit.");
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Invalid response JSON.";
       setIutResponseStatus("error");
@@ -194,26 +283,44 @@ export default function App() {
   }
 
   async function submitResponse() {
-    if (!activeVectorSetId || uploadedResponse == null) {
+    if (!activeSession || !activeVectorSetId || uploadedResponse == null) {
       setMessage("Select a vector set and upload a response JSON.");
       return;
     }
     await runBusy(async () => {
       setIutResponseStatus("loaded");
       setIutResponseErrorDetail("");
-      const result = await submitAcvpVectorSetResults(activeVectorSetId, uploadedResponse);
+      const immediateResult = await submitAcvpVectorSetResults(
+        activeSession.testSessionId,
+        activeVectorSetId,
+        uploadedResponse,
+        { workflowProfile }
+      );
+      const result = isStrict
+        ? await getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile })
+        : immediateResult ?? (await getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile }));
       setVectorResult(result);
       setIutResponseStatus("ready");
       setIutResponseErrorDetail("");
-      if (activeSession) {
-        setActiveSession(await getAcvpSession(activeSession.testSessionId));
-        setVectorSets(await getAcvpSessionVectorSets(activeSession.testSessionId));
-        setSessionResults(await getAcvpSessionResults(activeSession.testSessionId));
-      }
-      setMessage("Response validated.");
+      setActiveSession(await getAcvpSession(activeSession.testSessionId, { workflowProfile }));
+      setVectorSets(await getAcvpSessionVectorSets(activeSession.testSessionId, { workflowProfile }));
+      setSessionResults(await getAcvpSessionResults(activeSession.testSessionId, { workflowProfile }));
+      setRawTab("vector-results");
+      setMessage(isStrict ? "Response accepted with 204 No Content. Disposition loaded from GET results." : "Response validated.");
     }, (errorMessage) => {
       setIutResponseStatus("error");
       setIutResponseErrorDetail(errorMessage);
+    });
+  }
+
+  async function refreshSessionResults() {
+    if (!activeSession) {
+      setMessage("Select a Test Session before requesting session results.");
+      return;
+    }
+    await runBusy(async () => {
+      setSessionResults(await getAcvpSessionResults(activeSession.testSessionId, { workflowProfile }));
+      setRawTab("session-results");
     });
   }
 
@@ -222,7 +329,7 @@ export default function App() {
     setVectorSets([]);
     setActiveVectorSetId(null);
     setActiveVectorSet(null);
-    setExpectedResults(null);
+    setExpectedView(null);
     setUploadedResponse(null);
     setUploadedResponseName("");
     setIutResponseStatus("waiting");
@@ -251,11 +358,18 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">ACVP local client</p>
-          <h1>Capability, vector set, response, report</h1>
+          <p className="eyebrow">ACVP client UI</p>
+          <h1>Strict workflow-aware ACVP client</h1>
+          <p className="topbar-detail">Backend {API_BASE_URL}</p>
+        </div>
+        <div className="status-cluster">
+          <StatusChip label={serverStatus} tone={serverStatus} />
+          <StatusChip label={workflowProfile} tone={workflowProfile} />
+          <StatusChip label={isSample ? "sample" : "non-sample"} tone={isSample ? "sample" : "non-sample"} />
+          <StatusChip label="not production ACVP" tone="warning" />
         </div>
         <div className="actions">
-          <button type="button" onClick={refreshSessions} disabled={!isEnabled || isBusy}>
+          <button type="button" onClick={() => refreshSessions().catch((error: Error) => setMessage(error.message))} disabled={!isEnabled || isBusy}>
             Refresh
           </button>
           <button type="button" className="secondary" onClick={clearWorkspace} disabled={isBusy}>
@@ -269,8 +383,8 @@ export default function App() {
       <section className="workflow-grid">
         <section className="panel stack">
           <div className="panel-header">
-            <h2>Registry</h2>
-            <span className={`state-chip ${isEnabled ? "ready" : "pending"}`}>{config.status}</span>
+            <h2>Algorithm registry</h2>
+            <StatusChip label={config.status} tone={config.enabled ? "ready" : "in-development"} />
           </div>
           <label className="field">
             <span>FIPS version</span>
@@ -282,7 +396,15 @@ export default function App() {
               ))}
             </select>
           </label>
-          {!isEnabled ? <div className="development-banner">開發中</div> : null}
+          <MetadataGrid
+            items={[
+              ["algorithm", config.algorithm],
+              ["revision", config.revision],
+              ["status", config.status],
+              ["enabled", config.enabled ? "yes" : "no"]
+            ]}
+          />
+          {!isEnabled ? <div className="development-banner">{config.disabledReason ?? "Backend is not available."}</div> : null}
 
           <CapabilityControls
             config={config}
@@ -292,7 +414,78 @@ export default function App() {
             onToggleMode={(mode) => setSelectedModes((current) => toggleValue(current, mode))}
             onToggleParameterSet={(parameterSet) => setSelectedParameterSets((current) => toggleValue(current, parameterSet))}
           />
+        </section>
 
+        <section className="panel stack">
+          <div className="panel-header">
+            <h2>Workflow controls</h2>
+            <StatusChip label={workflowProfile} tone={workflowProfile} />
+          </div>
+          <div className="control-group">
+            <span>workflowProfile</span>
+            <div className="segmented fixed">
+              <button type="button" className={isStrict ? "active" : "secondary"} onClick={() => applyWorkflowProfile("strict")} disabled={isBusy}>
+                Strict
+              </button>
+              <button type="button" className={!isStrict ? "active" : "secondary"} onClick={() => applyWorkflowProfile("local")} disabled={isBusy}>
+                Local
+              </button>
+            </div>
+            <p className="subtle">
+              {isStrict
+                ? "Canonical nested routes, direct ACVP payloads, 204 result submission, GET results for disposition."
+                : "Local skeleton wrappers, expectedResults download, immediate validation body for demo/debug."}
+            </p>
+          </div>
+
+          <div className="control-group">
+            <span>generationProfile</span>
+            <div className="segmented fixed">
+              <button
+                type="button"
+                className={generationProfile === "nist-conformance" ? "active" : "secondary"}
+                onClick={() => setGenerationProfile("nist-conformance")}
+                disabled={!isEnabled || isBusy}
+              >
+                nist-conformance
+              </button>
+              <button
+                type="button"
+                className={generationProfile === "local-debug" ? "active" : "secondary"}
+                onClick={() => setGenerationProfile("local-debug")}
+                disabled={!isEnabled || isBusy}
+              >
+                local-debug
+              </button>
+            </div>
+            <p className="subtle">Controls vector count and KAT coverage only. It does not control route shape.</p>
+          </div>
+
+          <div className="control-group">
+            <span>isSample</span>
+            <div className="segmented fixed">
+              <button type="button" className={isSample ? "active" : "secondary"} onClick={() => setIsSample(true)} disabled={!isEnabled || isBusy}>
+                Sample
+              </button>
+              <button type="button" className={!isSample ? "active" : "secondary"} onClick={() => setIsSample(false)} disabled={!isEnabled || isBusy}>
+                Non-sample
+              </button>
+            </div>
+            <p className="subtle">
+              {isStrict && !isSample ? STRICT_EXPECTED_HIDDEN_MESSAGE : "Sample sessions may download expected results from the UI."}
+            </p>
+          </div>
+
+          <button type="button" className="secondary" onClick={() => applyWorkflowProfile("local")} disabled={isBusy}>
+            Quick local demo preset
+          </button>
+        </section>
+
+        <section className="panel stack">
+          <div className="panel-header">
+            <h2>Create Test Session</h2>
+            <StatusChip label={isEnabled ? "ready" : "disabled"} tone={isEnabled ? "ready" : "pending"} />
+          </div>
           <label className="field">
             <span>Label</span>
             <input value={label} onChange={(event) => setLabel(event.target.value)} disabled={!isEnabled || isBusy} />
@@ -322,9 +515,9 @@ export default function App() {
             />
           </label>
           <button type="button" onClick={createRegistrationSession} disabled={!isEnabled || isBusy || campaignSeedInvalid}>
-            Register capabilities
+            Create session
           </button>
-          <label className="file-button">
+          <label className={`file-button ${isEnabled && !isBusy ? "" : "disabled"}`} aria-disabled={!isEnabled || isBusy}>
             <span>Import prompt JSON</span>
             <input
               type="file"
@@ -342,8 +535,8 @@ export default function App() {
 
         <section className="panel stack">
           <div className="panel-header">
-            <h2>Test Sessions</h2>
-            <span className="count-pill">{sessions.length}</span>
+            <h2>Vector Set list</h2>
+            <span className="count-pill">{vectorSets.length}</span>
           </div>
           <div className="session-list">
             {sessions.map((session) => (
@@ -361,13 +554,6 @@ export default function App() {
             ))}
             {sessions.length === 0 ? <p className="empty-state">No sessions.</p> : null}
           </div>
-        </section>
-
-        <section className="panel stack wide-panel">
-          <div className="panel-header">
-            <h2>Vector Sets</h2>
-            <span className="count-pill">{vectorSets.length}</span>
-          </div>
           <div className="vector-toolbar">
             {vectorSets.map((vector) => (
               <button
@@ -381,22 +567,21 @@ export default function App() {
               </button>
             ))}
           </div>
-          <MetadataGrid session={activeSession} vector={activeVectorSummary} />
+          <SessionVectorMetadata session={activeSession} vector={activeVectorSummary} />
+        </section>
+
+        <section className="panel stack wide-panel">
+          <div className="panel-header">
+            <h2>Prompt download / preview</h2>
+            <StatusChip label={activeVectorSet?.sourceShape ?? "not loaded"} tone={activeVectorSet?.sourceShape === "strict-payload" ? "strict" : "local"} />
+          </div>
           <div className="actions">
             <button
               type="button"
-              onClick={() => activeVectorSet && downloadJson(`prompt-${activeVectorSet.vectorSetId}.json`, activeVectorSet.prompt)}
+              onClick={() => activeVectorSet && downloadJson(`prompt-${activeVectorSet.vectorSetId ?? activeVectorSetId ?? "vector"}.json`, activeVectorSet.prompt)}
               disabled={!activeVectorSet}
             >
               Download prompt
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => expectedResults && downloadJson(`expectedResults-${expectedResults.vectorSetId}.json`, expectedResults.expectedResults)}
-              disabled={!expectedResults}
-            >
-              Download expected
             </button>
           </div>
           <JsonPane title="Prompt" value={activeVectorSet?.prompt ?? null} />
@@ -404,15 +589,49 @@ export default function App() {
 
         <section className="panel stack">
           <div className="panel-header">
-            <h2>IUT Response</h2>
-            <span className={`state-chip ${iutResponseStatus}`} title={iutResponseErrorDetail}>
-              {iutResponseLabel}
-            </span>
+            <h2>ExpectedResults policy</h2>
+            <StatusChip label={expectedStatusLabel(expectedView)} tone={expectedTone(expectedView)} />
           </div>
-          <label
-            className={`file-button ${canUploadResponse ? "" : "disabled"}`}
-            aria-disabled={!canUploadResponse}
-          >
+          <p className="subtle">
+            {expectedView?.reason ??
+              (isStrict
+                ? "Strict sample vector sets return direct expected payloads. Strict non-sample vector sets hide expected results."
+                : "Local mode preserves the local expectedResults wrapper behavior.")}
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              onClick={() => loadExpectedResults().catch((error: Error) => setMessage(error.message))}
+              disabled={!activeVectorSet || (isStrict && !activeVectorIsSample) || isBusy}
+            >
+              Load expected
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => loadExpectedResults(undefined, undefined, false).catch((error: Error) => setMessage(error.message))}
+              disabled={!activeVectorSet || isBusy || (!isStrict && !expectedView)}
+            >
+              Policy check
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => expectedView?.expectedResults && downloadJson(`expectedResults-${activeVectorSetId ?? "vector"}.json`, expectedView.expectedResults)}
+              disabled={!expectedView?.expectedResults}
+            >
+              Download expected
+            </button>
+          </div>
+          <JsonPane title="Expected" value={expectedView?.expectedResults ?? null} />
+        </section>
+
+        <section className="panel stack">
+          <div className="panel-header">
+            <h2>IUT response upload</h2>
+            <StatusChip label={iutResponseLabel} tone={iutResponseStatus} />
+          </div>
+          <label className={`file-button ${canUploadResponse ? "" : "disabled"}`} aria-disabled={!canUploadResponse}>
             <span>Upload response JSON</span>
             <input
               type="file"
@@ -425,7 +644,7 @@ export default function App() {
               }}
             />
           </label>
-
+          <p className="subtle">Browser only checks JSON syntax. Backend validates ACVP schema.</p>
           {!activeSession ? (
             <p className="subtle">Select a Test Session before uploading a response JSON.</p>
           ) : !activeVectorSetId ? (
@@ -435,32 +654,98 @@ export default function App() {
           {iutResponseStatus === "error" && iutResponseErrorDetail ? (
             <p className="response-error-detail">{iutResponseErrorDetail}</p>
           ) : null}
-          <button type="button" onClick={submitResponse} disabled={!canValidateResponse}>
-            Validate response
+          <button type="button" onClick={submitResponse} disabled={!canSubmitResponse}>
+            Submit response
           </button>
-          <JsonPane title="Response" value={uploadedResponse} />
+          <JsonPane title="Uploaded response" value={uploadedResponse} />
         </section>
 
         <section className="panel stack wide-panel">
           <div className="panel-header">
-            <h2>Validation Report</h2>
-            <span className={`state-chip ${vectorResult?.status === "validated" ? "ready" : "pending"}`}>{vectorResult?.status ?? "not submitted"}</span>
+            <h2>VectorSet results</h2>
+            <StatusChip label={vectorResult?.disposition ?? "unreceived"} tone={vectorResult?.disposition ?? "unreceived"} />
           </div>
           <SummaryStrip result={vectorResult} sessionResults={sessionResults} />
           <div className="actions">
-            <button type="button" onClick={() => activeReport && downloadJson(`report-${activeReport.importId}.json`, activeReport)} disabled={!activeReport}>
-              Export JSON
+            <button
+              type="button"
+              onClick={() =>
+                activeSession &&
+                activeVectorSetId &&
+                getAcvpVectorSetResults(activeSession.testSessionId, activeVectorSetId, { workflowProfile })
+                  .then((result) => {
+                    setVectorResult(result);
+                    setRawTab("vector-results");
+                  })
+                  .catch((error: Error) => setMessage(error.message))
+              }
+              disabled={!activeSession || !activeVectorSetId || isBusy}
+            >
+              GET vectorSet results
+            </button>
+            <button type="button" className="secondary" onClick={refreshSessionResults} disabled={!activeSession || isBusy}>
+              GET session results
+            </button>
+            <button type="button" className="secondary" onClick={() => activeReport && downloadJson(`report-${activeReport.importId}.json`, activeReport)} disabled={!activeReport}>
+              Export local report JSON
             </button>
             <button type="button" className="secondary" onClick={() => activeReport && downloadText(`report-${activeReport.importId}.md`, activeReport.markdown)} disabled={!activeReport}>
-              Export markdown
+              Export local report MD
             </button>
           </div>
+          <ResultTable result={vectorResult} />
           <ReportPane report={activeReport} />
+        </section>
+
+        <section className="panel stack">
+          <div className="panel-header">
+            <h2>TestSession results</h2>
+            <StatusChip label={sessionResults?.passed === true ? "passed" : sessionResults?.passed === false ? "fail" : "not loaded"} tone={sessionResults?.passed === true ? "passed" : sessionResults?.passed === false ? "fail" : "pending"} />
+          </div>
+          <SessionResultsList results={sessionResults} />
+        </section>
+
+        <section className="panel stack wide-panel">
+          <div className="panel-header">
+            <h2>Raw JSON inspector</h2>
+            <StatusChip label={rawTab} tone="info" />
+          </div>
+          <div className="segmented raw-tabs">
+            {RAW_TABS.map((tab) => (
+              <button key={tab.id} type="button" className={rawTab === tab.id ? "active" : "secondary"} onClick={() => setRawTab(tab.id)}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <JsonPane title={RAW_TABS.find((tab) => tab.id === rawTab)?.label ?? "Raw"} value={rawInspectorValue} />
+        </section>
+
+        <section className="panel stack">
+          <div className="panel-header">
+            <h2>Warnings / remaining gaps</h2>
+            <StatusChip label="demo" tone="warning" />
+          </div>
+          <ul className="warning-list">
+            <li>This UI is not a production ACVP client.</li>
+            <li>Auth, JWT, mTLS, `/large`, and async validation are not implemented.</li>
+            <li>Strict workflow uses nested routes and direct payloads, but the backend remains a local skeleton.</li>
+            <li>FIPS203 / ML-KEM backend is not merged yet.</li>
+            <li>HTTP 204 only means the response was accepted; disposition comes from GET results.</li>
+          </ul>
         </section>
       </section>
     </main>
   );
 }
+
+const RAW_TABS: { id: RawTab; label: string }[] = [
+  { id: "session", label: "session" },
+  { id: "prompt", label: "vectorSet prompt" },
+  { id: "expected", label: "expected" },
+  { id: "uploaded", label: "uploaded response" },
+  { id: "vector-results", label: "vectorSet results" },
+  { id: "session-results", label: "session results" }
+];
 
 function CapabilityControls({
   config,
@@ -482,6 +767,7 @@ function CapabilityControls({
       <div className="control-group">
         <span>Modes</span>
         <div className="segmented">
+          {config.modes.length === 0 ? <p className="subtle">No backend modes are available.</p> : null}
           {config.modes.map((mode) => (
             <button
               type="button"
@@ -498,6 +784,7 @@ function CapabilityControls({
       <div className="control-group">
         <span>Parameter sets</span>
         <div className="segmented">
+          {config.parameterSets.length === 0 ? <p className="subtle">No backend parameter sets are available.</p> : null}
           {config.parameterSets.map((parameterSet) => (
             <button
               type="button"
@@ -515,38 +802,47 @@ function CapabilityControls({
   );
 }
 
-function MetadataGrid({ session, vector }: { session: AcvpSessionDetail | null; vector: AcvpVectorSetSummary | null }) {
+function MetadataGrid({ items }: { items: [string, string | number][] }) {
   return (
     <dl className="metadata-grid">
-      <div>
-        <dt>session</dt>
-        <dd>{session?.status ?? "none"}</dd>
-      </div>
-      <div>
-        <dt>vector</dt>
-        <dd>{vector?.status ?? "none"}</dd>
-      </div>
-      <div>
-        <dt>mode</dt>
-        <dd>{vector?.mode ?? session?.mode ?? "n/a"}</dd>
-      </div>
-      <div>
-        <dt>cases</dt>
-        <dd>{vector?.testCaseCount ?? session?.testCaseCount ?? 0}</dd>
-      </div>
+      {items.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
     </dl>
   );
 }
 
-function SummaryStrip({ result, sessionResults }: { result: AcvpVectorSetResult | null; sessionResults: AcvpSessionResults | null }) {
-  const summary = result?.validationResult.summary;
+function SessionVectorMetadata({ session, vector }: { session: AcvpSessionDetail | null; vector: AcvpVectorSetSummary | null }) {
+  return (
+    <MetadataGrid
+      items={[
+        ["session", session?.status ?? "none"],
+        ["vector", vector?.status ?? "none"],
+        ["mode", vector?.mode ?? session?.mode ?? "n/a"],
+        ["cases", vector?.testCaseCount ?? session?.testCaseCount ?? 0]
+      ]}
+    />
+  );
+}
+
+function SummaryStrip({ result, sessionResults }: { result: NormalizedVectorSetResultView | null; sessionResults: NormalizedSessionResultsView | null }) {
+  const validationSummary = result?.validationResult?.summary;
+  const tests = result?.tests ?? [];
+  const passed = validationSummary?.passed ?? tests.filter((test) => test.result === "passed").length;
+  const failed = validationSummary?.failed ?? tests.filter((test) => test.result === "fail" || test.result === "failed").length;
+  const missing = validationSummary?.missing ?? tests.filter((test) => test.result === "missing").length;
+  const malformed = validationSummary?.malformed ?? tests.filter((test) => test.result === "malformed").length;
+  const pending = sessionResults?.results.filter((item) => item.disposition !== "passed" && item.status !== "passed").length ?? 0;
   return (
     <div className="summary-strip">
-      <Metric label="passed" value={summary?.passed ?? 0} tone="pass" />
-      <Metric label="failed" value={summary?.failed ?? 0} tone="fail" />
-      <Metric label="missing" value={summary?.missing ?? 0} tone="warn" />
-      <Metric label="malformed" value={summary?.malformed ?? 0} tone="info" />
-      <Metric label="session pending" value={Number(sessionResults?.summary?.pendingVectorSets ?? 0)} tone="neutral" />
+      <Metric label="passed" value={passed} tone="pass" />
+      <Metric label="failed" value={failed} tone="fail" />
+      <Metric label="missing" value={missing} tone="warn" />
+      <Metric label="malformed" value={malformed} tone="info" />
+      <Metric label="session pending" value={pending} tone="neutral" />
     </div>
   );
 }
@@ -564,16 +860,63 @@ function JsonPane({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="json-pane">
       <h3>{title}</h3>
-      {value ? <JsonViewer value={value} /> : <p className="empty-state">No JSON.</p>}
+      {value !== null && value !== undefined ? <JsonViewer value={value} /> : <p className="empty-state">No JSON.</p>}
+    </div>
+  );
+}
+
+function ResultTable({ result }: { result: NormalizedVectorSetResultView | null }) {
+  if (!result) {
+    return <p className="empty-state">No vectorSet result loaded.</p>;
+  }
+  if (result.tests.length === 0) {
+    return <p className="subtle">Disposition: {result.disposition}. Local validation details are available in the report if present.</p>;
+  }
+  return (
+    <div className="result-table" role="table" aria-label="Vector set result tests">
+      <div className="result-row result-head" role="row">
+        <span>tcId</span>
+        <span>result</span>
+        <span>reason</span>
+      </div>
+      {result.tests.slice(0, 50).map((test, index) => (
+        <div className="result-row" role="row" key={`${test.tcId ?? index}-${index}`}>
+          <span>{test.tcId ?? "n/a"}</span>
+          <span>{test.result ?? "n/a"}</span>
+          <span>{test.reason ?? ""}</span>
+        </div>
+      ))}
+      {result.tests.length > 50 ? <p className="subtle">Showing first 50 of {result.tests.length} tests.</p> : null}
+    </div>
+  );
+}
+
+function SessionResultsList({ results }: { results: NormalizedSessionResultsView | null }) {
+  if (!results) {
+    return <p className="empty-state">No session results loaded.</p>;
+  }
+  return (
+    <div className="session-results-list">
+      {results.results.length === 0 ? <p className="empty-state">No vectorSet results.</p> : null}
+      {results.results.map((item, index) => (
+        <div className="session-result-item" key={`${item.vectorSetUrl}-${index}`}>
+          <span>{item.vectorSetUrl}</span>
+          <strong>{item.disposition ?? item.status}</strong>
+        </div>
+      ))}
     </div>
   );
 }
 
 function ReportPane({ report }: { report: Report | null }) {
   if (!report) {
-    return <p className="empty-state">No report.</p>;
+    return <p className="empty-state">No local validation report.</p>;
   }
   return <pre className="markdown-preview">{report.markdown}</pre>;
+}
+
+function StatusChip({ label, tone }: { label: string; tone: string }) {
+  return <span className={`state-chip ${tone}`}>{label}</span>;
 }
 
 function responseStatusLabel(status: IutResponseStatus): string {
@@ -581,9 +924,32 @@ function responseStatusLabel(status: IutResponseStatus): string {
     return "ready";
   }
   if (status === "error") {
-    return "error: Wrong response format!";
+    return "error";
   }
   return status;
+}
+
+function expectedStatusLabel(view: NormalizedExpectedView | null): string {
+  if (!view) {
+    return "not loaded";
+  }
+  if (view.denied) {
+    return "denied";
+  }
+  if (view.available) {
+    return "available";
+  }
+  return "unavailable";
+}
+
+function expectedTone(view: NormalizedExpectedView | null): string {
+  if (!view) {
+    return "pending";
+  }
+  if (view.denied) {
+    return "denied";
+  }
+  return view.available ? "ready" : "warning";
 }
 
 function validateCampaignSeed(value: string): { valid: boolean; message: string } {
@@ -656,6 +1022,48 @@ function buildRegistrationAlgorithms(config: FipsVersionConfig, modes: Capabilit
     }
     return registration;
   });
+}
+
+function vectorSetIsSample(
+  vector: NormalizedVectorSetView | null,
+  session: AcvpSessionDetail | null,
+  fallback: boolean
+): boolean {
+  const promptSample = vector?.prompt.isSample;
+  if (typeof promptSample === "boolean") {
+    return promptSample;
+  }
+  if (typeof session?.isSample === "boolean") {
+    return session.isSample;
+  }
+  return fallback;
+}
+
+function rawValueForTab(
+  tab: RawTab,
+  session: AcvpSessionDetail | null,
+  vector: NormalizedVectorSetView | null,
+  expected: NormalizedExpectedView | null,
+  uploaded: JsonValue | null,
+  vectorResult: NormalizedVectorSetResultView | null,
+  sessionResults: NormalizedSessionResultsView | null
+): unknown {
+  if (tab === "session") {
+    return session;
+  }
+  if (tab === "prompt") {
+    return vector?.raw ?? vector?.prompt ?? null;
+  }
+  if (tab === "expected") {
+    return expected?.raw ?? expected?.expectedResults ?? null;
+  }
+  if (tab === "uploaded") {
+    return uploaded;
+  }
+  if (tab === "vector-results") {
+    return vectorResult?.raw ?? null;
+  }
+  return sessionResults?.raw ?? null;
 }
 
 function toggleValue<T>(values: T[], value: T): T[] {
