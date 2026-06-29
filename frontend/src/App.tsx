@@ -141,15 +141,20 @@ export default function App() {
       return;
     }
     await runBusy(async () => {
-      const payload = {
+      const trimmedCampaignSeed = campaignSeed.trim();
+      const payload: JsonObject = {
         algorithms: buildRegistrationAlgorithms(config, selectedModes, selectedParameterSets),
         label,
-        campaignSeed: campaignSeed.trim() || undefined,
-        testsPerGroup,
         generationProfile,
         isSample,
         autoGenerateVectorSets: true
       };
+      if (trimmedCampaignSeed) {
+        payload.campaignSeed = trimmedCampaignSeed;
+      }
+      if (!isStrict) {
+        payload.testsPerGroup = testsPerGroup;
+      }
       const created = await createAcvpSession(payload as JsonValue, {
         workflowProfile,
         generationProfile,
@@ -537,17 +542,19 @@ export default function App() {
               {campaignSeedValidation.message}
             </small>
           </label>
-          <label className="field short">
-            <span>Tests per group</span>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={testsPerGroup}
-              onChange={(event) => setTestsPerGroup(Number(event.target.value))}
-              disabled={!isEnabled || isBusy}
-            />
-          </label>
+          {!isStrict ? (
+            <label className="field short">
+              <span>Tests per group</span>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={testsPerGroup}
+                onChange={(event) => setTestsPerGroup(Number(event.target.value))}
+                disabled={!isEnabled || isBusy}
+              />
+            </label>
+          ) : null}
           <button type="button" onClick={createRegistrationSession} disabled={!isEnabled || isBusy || campaignSeedInvalid}>
             Create session
           </button>
