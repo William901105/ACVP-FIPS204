@@ -47,7 +47,6 @@ export default function App() {
   const [fipsId, setFipsId] = useState<FipsVersionId>("FIPS204");
   const config = useMemo(() => getFipsConfig(fipsId), [fipsId]);
   const [workflowProfile, setWorkflowProfile] = useState<AcvpWorkflowProfile>("strict");
-  const [generationProfile, setGenerationProfile] = useState<AcvpGenerationProfile>("nist-conformance");
   const [isSample, setIsSample] = useState(false);
   const [selectedModes, setSelectedModes] = useState<CapabilityMode[]>(["keyGen"]);
   const [selectedParameterSets, setSelectedParameterSets] = useState<string[]>(["ML-DSA-44"]);
@@ -74,6 +73,7 @@ export default function App() {
 
   const isEnabled = config.enabled;
   const isStrict = workflowProfile === "strict";
+  const generationProfile: AcvpGenerationProfile = isStrict ? "nist-conformance" : "local-debug";
   const activeVectorSummary = vectorSets.find((item) => item.vectorSetId === activeVectorSetId) ?? null;
   const activeReport = vectorResult?.report ?? null;
   const policyWorkflowProfile = activeVectorSet ? workflowProfileForVectorSet(activeVectorSet) : "strict";
@@ -117,11 +117,9 @@ export default function App() {
   function applyWorkflowProfile(profile: AcvpWorkflowProfile) {
     setWorkflowProfile(profile);
     if (profile === "strict") {
-      setGenerationProfile("nist-conformance");
       setIsSample(false);
       setLabel("strict ML-DSA registration");
     } else {
-      setGenerationProfile("local-debug");
       setIsSample(true);
       setLabel("local ML-DSA registration");
     }
@@ -475,29 +473,6 @@ export default function App() {
                 ? "Canonical nested routes, direct ACVP payloads, 204 result submission, GET results for disposition."
                 : "Local skeleton wrappers, expectedResults download, immediate validation body for demo/debug."}
             </p>
-          </div>
-
-          <div className="control-group">
-            <span>generationProfile</span>
-            <div className="segmented fixed">
-              <button
-                type="button"
-                className={generationProfile === "nist-conformance" ? "active" : "secondary"}
-                onClick={() => setGenerationProfile("nist-conformance")}
-                disabled={!isEnabled || isBusy}
-              >
-                nist-conformance
-              </button>
-              <button
-                type="button"
-                className={generationProfile === "local-debug" ? "active" : "secondary"}
-                onClick={() => setGenerationProfile("local-debug")}
-                disabled={!isEnabled || isBusy}
-              >
-                local-debug
-              </button>
-            </div>
-            <p className="subtle">Controls vector count and KAT coverage only. It does not control route shape.</p>
           </div>
 
           <div className="control-group">
